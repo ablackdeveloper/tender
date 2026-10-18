@@ -60,9 +60,7 @@ Still open: physical camera/microphone/file picker, native upload cancellation/r
 
 ## CI
 
-`.github/workflows/user-flows.yml` runs browser integration on Linux, native database/API/Auth integration on Windows, and Storage/account integration on Linux with Docker. Every job saves evidence even on failure. No hosted account or project secret is required. CI configuration is prepared; local evidence does not prove a GitHub run.
-
-## Verified local run: 18 October 2026
+`.github/workflows/user-flows.yml` runs browser integration on Linux, native database/API/Auth/password integration on Windows, and Storage/account integration on Linux with Docker. Jobs upload available reports even on failure. No hosted account or project secret is required. See the run-specific evidence below; a local pass alone does not prove a GitHub run.
 
 ## Password and Storage follow-up: 18 October 2026
 

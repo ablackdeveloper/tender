@@ -169,7 +169,7 @@ export async function runNativeApiIntegration({
           ),
         ),
         PATH: `${postgresBin}${path.delimiter}${process.env.PATH ?? process.env.Path ?? ""}`,
-        PGRST_DB_URI: `postgresql://native_api_authenticator@127.0.0.1:${port}/postgres`,
+        PGRST_DB_URI: `postgresql://native_api_authenticator@127.0.0.1:${port}/postgres?sslmode=disable`,
         PGRST_DB_SCHEMAS: "public",
         PGRST_DB_ANON_ROLE: "anon",
         PGRST_DB_EXTRA_SEARCH_PATH: "public,extensions",
