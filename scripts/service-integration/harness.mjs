@@ -206,17 +206,20 @@ export async function createServiceHarness({
     children.push(child);
     return child;
   }
-  async function ready(url, child) {
-    for (let i = 0; i < 200; i++) {
+  async function ready(url, child, name) {
+    const deadline = Date.now() + 120000;
+    while (Date.now() < deadline) {
       if (child.exitCode !== null)
-        throw new Error(`Service exited (${child.exitCode}): ${child.log}`);
+        throw new Error(`${name} exited (${child.exitCode}): ${child.log}`);
       try {
         if ((await fetch(url, { signal: AbortSignal.timeout(1000) })).ok)
           return;
       } catch {}
       await pause(150);
     }
-    throw new Error(`Service startup timed out: ${child.log}`);
+    throw new Error(
+      `${name} startup timed out after 120 seconds: ${child.log}`,
+    );
   }
   try {
     for (const file of ["auth.exe", "deno.exe", "auth-2.197.0/migrations"])
@@ -402,13 +405,14 @@ export async function createServiceHarness({
         ].map((k) => [`GOTRUE_MAILER_URLPATHS_${k}`, "/auth/v1/verify"]),
       ),
     };
+    console.log("Starting real Auth and applying its migrations...");
     const auth = service(
       path.join(tools, "auth.exe"),
       [],
       authEnv,
       path.join(tools, "auth-2.197.0"),
     );
-    await ready(`${apiUrl}/auth/v1/health`, auth);
+    await ready(`${apiUrl}/auth/v1/health`, auth, "Auth");
     await sql("grant all on auth.users to service_role;");
     // Never load the SQL-only auth fixture seed into the real Auth schema.
     for (const name of readdirSync(path.join(workspace, "supabase/migrations"))
@@ -420,6 +424,7 @@ export async function createServiceHarness({
     await sql(
       "create role service_test_authenticator login noinherit; grant anon,authenticated,service_role to service_test_authenticator;",
     );
+    console.log("Starting PostgREST for the isolated database...");
     const rest = service(
       path.join(
         workspace,
@@ -440,7 +445,7 @@ export async function createServiceHarness({
       },
       cluster,
     );
-    await ready(`${apiUrl}/rest/v1/`, rest);
+    await ready(`${apiUrl}/rest/v1/`, rest, "PostgREST");
     const edge = service(
       path.join(tools, "deno.exe"),
       [
