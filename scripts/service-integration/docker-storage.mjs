@@ -24,7 +24,10 @@ const requireMobile = createRequire(
   path.join(workspace, "apps/mobile/package.json"),
 );
 const { createClient } = requireMobile("@supabase/supabase-js");
-const id = `tender-flow-${randomUUID()}`;
+// The pinned CLI truncates project IDs at 40 characters. Keep the full UUID
+// within that limit so startup, ownership checks, and stop use the same ID.
+const id = `t-${randomUUID()}`;
+assert.ok(id.length <= 40);
 const output = path.join(
   workspace,
   "scripts/feature-integration/artifacts/storage-runs",

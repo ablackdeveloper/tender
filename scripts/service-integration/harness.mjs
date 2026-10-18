@@ -427,7 +427,7 @@ export async function createServiceHarness({
       ),
       [],
       {
-        PGRST_DB_URI: `postgresql://service_test_authenticator@127.0.0.1:${dbPort}/postgres`,
+        PGRST_DB_URI: `postgresql://service_test_authenticator@127.0.0.1:${dbPort}/postgres?sslmode=disable`,
         PGRST_DB_SCHEMAS: "public",
         PGRST_DB_ANON_ROLE: "anon",
         PGRST_DB_EXTRA_SEARCH_PATH: "public,extensions",
