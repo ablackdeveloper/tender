@@ -26,6 +26,7 @@ import {
   removeCluster,
 } from "../run-native-postgres-integration.mjs";
 import { startMailSink } from "./mail-sink.mjs";
+import { verifyPostgrestRuntime } from "../postgrest-runtime.mjs";
 
 export const workspace = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -222,6 +223,7 @@ export async function createServiceHarness({
     );
   }
   try {
+    const postgrestExe = verifyPostgrestRuntime(workspace);
     for (const file of ["auth.exe", "deno.exe", "auth-2.197.0/migrations"])
       assert.ok(
         existsSync(path.join(tools, file)),
@@ -426,10 +428,7 @@ export async function createServiceHarness({
     );
     console.log("Starting PostgREST for the isolated database...");
     const rest = service(
-      path.join(
-        workspace,
-        "scripts/feature-integration/artifacts/native-api-tools/postgrest.exe",
-      ),
+      postgrestExe,
       [],
       {
         PGRST_DB_URI: `postgresql://service_test_authenticator@127.0.0.1:${dbPort}/postgres?sslmode=disable`,
@@ -510,6 +509,7 @@ export async function createServiceHarness({
       deno: "2.9.7",
       sdk: "2.112.3",
       postgrest: "16.4",
+      gettext: "0.26 (private test runtime)",
     };
     save();
     console.log(

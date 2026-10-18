@@ -7,6 +7,7 @@ import { createServer } from "node:http";
 import { once } from "node:events";
 import { createRequire } from "node:module";
 import { readFileSync, existsSync } from "node:fs";
+import { verifyPostgrestRuntime } from "./postgrest-runtime.mjs";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import vm from "node:vm";
@@ -111,6 +112,7 @@ export async function runNativeApiIntegration({
   );
   const archive = path.join(tools, `postgrest-v${version}-windows-x86-64.zip`);
   const exe = path.join(tools, "postgrest.exe");
+  verifyPostgrestRuntime(workspace);
   if (!existsSync(archive) || !existsSync(exe))
     throw new Error(
       "Install the pinned Windows PostgREST archive using scripts/setup-native-api.ps1 first.",

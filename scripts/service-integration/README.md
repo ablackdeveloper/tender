@@ -16,6 +16,8 @@ The first setup downloads and builds tools. Allow 10–20 minutes on a new machi
 
 The setup pins Go 1.27.2, Supabase Auth 2.197.0, Deno 2.9.7, the Supabase SDK 2.112.3, Android platform tools 37.0.1, Java 21.0.12.1, and Maestro 2.11.0. Download checksums are in `setup.ps1`. PostgreSQL and PostgREST reuse the existing verified installers. Auth has one test-only Windows adapter: `prepare-auth.mjs` removes the Unix `SO_REUSEPORT` listener option from the downloaded source. Its authentication logic is unchanged. This is a custom native test runtime, not the supported Supabase CLI native runtime.
 
+`setup-native-api.ps1` also installs a private gettext 0.26 / iconv 1.17 runtime beside PostgREST. The EDB archive contains gettext 0.19.8, which has a [documented Windows threading crash](https://github.com/diesel-rs/diesel/discussions/2947). Archive and DLL hashes are pinned and checked. The system PostgreSQL installation is unchanged. Startup readiness has a 120-second deadline so fresh Auth migrations can finish on CI. This does not change test assertions or HTTP request timeouts.
+
 ## What the 36 service scenarios prove
 
 | Area | Checks |
