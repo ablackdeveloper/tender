@@ -1,0 +1,108 @@
+name: User flow integration
+
+on:
+  pull_request:
+    paths:
+      - "apps/mobile/**"
+      - "packages/domain/**"
+      - "scripts/**"
+      - "sites/flutterings/**"
+      - "supabase/**"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - ".github/workflows/user-flows.yml"
+  push:
+    branches: [main, master]
+    paths:
+      - "apps/mobile/**"
+      - "packages/domain/**"
+      - "scripts/**"
+      - "sites/flutterings/**"
+      - "supabase/**"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - ".github/workflows/user-flows.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
+        with:
+          version: 11.19.0
+          run_install: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec playwright install --with-deps chromium
+      - run: pnpm test:flows:browser
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: browser-flow-evidence
+          path: scripts/feature-integration/artifacts/
+          if-no-files-found: error
+          retention-days: 7
+  database-api:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
+        with:
+          version: 11.19.0
+          run_install: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: ./scripts/setup-native-api.ps1
+        shell: pwsh
+      - run: pnpm test:api-integration:native
+      - run: ./scripts/service-integration/setup.ps1
+        shell: pwsh
+      - run: pnpm test:flows:services
+      - run: pnpm test:flows:passwords
+        env:
+          TENDER_TEST_PASSWORD_SOURCE: disposable-generated
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: database-api-evidence
+          path: |
+            scripts/feature-integration/artifacts/native-api/
+            scripts/feature-integration/artifacts/service-runs/
+            scripts/feature-integration/artifacts/password-runs/
+          if-no-files-found: error
+          retention-days: 7
+  storage-account:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
+        with:
+          version: 11.19.0
+          run_install: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm test:flows:storage
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: storage-account-evidence
+          path: scripts/feature-integration/artifacts/storage-runs/
+          if-no-files-found: error
+          retention-days: 7

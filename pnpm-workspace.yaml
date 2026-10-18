@@ -1,0 +1,14 @@
+packages:
+  - apps/*
+  - packages/*
+
+# Delay newly published transitive packages long enough for basic ecosystem review.
+minimumReleaseAge: 1440
+
+# Expo and React Native rely on peer dependencies supplied by the SDK template.
+autoInstallPeers: true
+
+# Native resolver used by eslint-import-resolver-typescript. pnpm 11 denies
+# every lifecycle script not explicitly decided here.
+allowBuilds:
+  unrs-resolver: true
