@@ -64,6 +64,16 @@ Still open: physical camera/microphone/file picker, native upload cancellation/r
 
 ## Verified local run: 18 October 2026
 
+## Password and Storage follow-up: 18 October 2026
+
+Password run `8535fc1e-9196-4b4e-8a3f-a6fb6b6bb98a` passed all 20 cases in a fresh native service stack. Cleanup passed. Service run `5d2862a6-4f91-4812-9a9d-6859275bae03` also passed all 36 cases after the password-policy and explicit local database connection updates.
+
+The real Storage job in [CI run 39172929482](https://github.com/ablackdeveloper/tender/actions/runs/39172929482) passed all 13 cases with cleanup verified. The run ID is `t-b7a37487-3d6b-4a6e-addd-19928fbfce6d`. An earlier CI attempt failed before any Storage case because Supabase truncates project IDs at 40 characters. IDs now retain a full UUID within that limit, so start, ownership checks, and cleanup use the same value. The failed attempt is not counted as evidence of passing tests or cleanup.
+
+Fresh Windows CI also exposed a pgTAP setup error hidden by the local tool cache. Archive extraction now passes file paths directly to `tar`, without a PowerShell command-string argument boundary.
+
+### Earlier complete local run
+
 Run `91fbe625-92c1-47cb-b038-6731c3aa8fd1` passed in 6.1 minutes on Node 22.23.1: 145 browser scenarios, 34 database/API scenarios, 36 real Auth/email/account scenarios, 252 database assertions, and 8 harness checks. The invitation race passed. Service cleanup verified closed ports and removed the temporary database. Browser and earlier database/API cleanup also passed.
 
 The report is `../feature-integration/artifacts/runs/91fbe625-92c1-47cb-b038-6731c3aa8fd1/summary.json`. TypeScript, the changed app-config lint check, Deno type checking, JavaScript syntax, formatting, and CI/phone YAML parsing passed. The setup script passed a repeat run. Storage and phone readiness checks returned blocked, with zero tests executed. No unit tests were added or run.

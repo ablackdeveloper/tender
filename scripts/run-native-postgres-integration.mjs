@@ -164,15 +164,8 @@ async function ensurePgTap() {
   if (!existsSync(pgTapSqlTemplate)) {
     mkdirSync(pgTapExtractRoot, { recursive: true });
     run(
-      "powershell.exe",
-      [
-        "-NoProfile",
-        "-NonInteractive",
-        "-Command",
-        "Expand-Archive -LiteralPath $args[0] -DestinationPath $args[1] -Force",
-        pgTapArchivePath,
-        pgTapExtractRoot,
-      ],
+      "tar",
+      ["-xf", pgTapArchivePath, "-C", pgTapExtractRoot],
       { label: "pgTAP archive extraction" },
     );
   }
