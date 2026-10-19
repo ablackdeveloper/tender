@@ -406,7 +406,7 @@ export async function runFlows({ scenario }) {
       `Native upload status: ${state[0].upload_status}; code: ${state[0].upload_error_code ?? "none"}`,
     );
     await c.ui([
-      scrollTo("Open private document"),
+      scrollTo("Open private document", "UP"),
       visible("Open private document"),
     ]);
     const row = await c.stack.admin
