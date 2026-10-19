@@ -59,6 +59,7 @@ async function execute(
     env,
     cwd,
     stdio: ["ignore", "pipe", "pipe"],
+    detached: process.platform !== "win32",
   });
   const chunks = [];
   child.stdout.on("data", (b) => {
@@ -70,10 +71,26 @@ async function execute(
     }
   });
   child.stderr.on("data", (b) => chunks.push(b));
-  const timer = setTimeout(() => child.kill("SIGKILL"), timeout);
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    try {
+      if (process.platform !== "win32") process.kill(-child.pid, "SIGKILL");
+      else child.kill("SIGKILL");
+    } catch (error) {
+      if (error.code !== "ESRCH") child.kill("SIGKILL");
+    }
+    child.stdout.destroy();
+    child.stderr.destroy();
+  }, timeout);
   const [code] = await once(child, "close");
   clearTimeout(timer);
   if (log) writeFileSync(log, Buffer.concat(chunks));
+  assert.equal(
+    timedOut,
+    false,
+    `${path.basename(file)} timed out during ${stage}`,
+  );
   assert.equal(
     code,
     0,
@@ -311,6 +328,9 @@ try {
       }
     }
     const file = path.join(stack.root, `flow-${++sequence}.yaml`);
+    console.log(
+      `Native ${stage} step ${sequence}: ${commands.map((entry) => Object.keys(entry)[0]).join(", ")}`,
+    );
     writeFileSync(
       file,
       `appId: ${appId}\n---\n${JSON.stringify(commands, null, 2)}\n`,
@@ -331,7 +351,7 @@ try {
         ],
         {
           log: path.join(stack.root, `maestro-${sequence}.log`),
-          timeout: 240000,
+          timeout: 120000,
         },
       );
     } catch (error) {
@@ -349,13 +369,34 @@ try {
           .join("\n"),
       );
       try {
-        adb("shell", "uiautomator", "dump", "/sdcard/tender-e2e.xml");
+        command(
+          "adb",
+          [
+            "-s",
+            serial,
+            "shell",
+            "uiautomator",
+            "dump",
+            "/sdcard/tender-e2e.xml",
+          ],
+          { timeout: 15000 },
+        );
         writeFileSync(
           path.join(output, `${stage}-hierarchy.xml`),
           redact(adb("shell", "cat", "/sdcard/tender-e2e.xml")),
         );
+      } catch {
+        console.error(`Native ${stage}: UI hierarchy was unavailable`);
       } finally {
-        adb("shell", "rm", "-f", "/sdcard/tender-e2e.xml");
+        try {
+          command(
+            "adb",
+            ["-s", serial, "shell", "rm", "-f", "/sdcard/tender-e2e.xml"],
+            { timeout: 10000 },
+          );
+        } catch {
+          /* Final app/device cleanup still runs. */
+        }
       }
       throw error;
     }

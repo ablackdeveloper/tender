@@ -37,27 +37,31 @@ async function accountExists(ctx) {
   );
 }
 async function readMail(ctx) {
-  for (let i = 0; i < 40; i++) {
+  console.log("Native inbox: waiting for the current case's email");
+  const deadline = Date.now() + 30000;
+  const request = (url) =>
+    fetch(url, { signal: AbortSignal.timeout(3000), redirect: "error" });
+  while (Date.now() < deadline) {
     // Supabase CLI local SMTP uses Mailpit in newer versions and Inbucket in older versions.
     const base = ctx.stack.mailUrl;
-    const list = await fetch(`${base}/api/v1/messages`)
+    const list = await request(`${base}/api/v1/messages`)
       .then((r) => (r.ok ? r.json() : null))
       .catch(() => null);
     const item = list?.messages?.find((m) =>
       m.To?.some((to) => to.Address === ctx.user.email),
     );
     if (item) {
-      const mail = await fetch(`${base}/api/v1/message/${item.ID}`).then((r) =>
-        r.json(),
+      const mail = await request(`${base}/api/v1/message/${item.ID}`).then(
+        (r) => r.json(),
       );
       return `${mail.Text}\n${mail.HTML}`;
     }
     const inbox = ctx.user.email.split("@")[0];
-    const old = await fetch(`${base}/api/v1/mailbox/${inbox}`)
+    const old = await request(`${base}/api/v1/mailbox/${inbox}`)
       .then((r) => (r.ok ? r.json() : null))
       .catch(() => null);
     if (Array.isArray(old) && old.length) {
-      const mail = await fetch(
+      const mail = await request(
         `${base}/api/v1/mailbox/${inbox}/${old.at(-1).id}`,
       ).then((r) => r.json());
       return `${mail.body.text}\n${mail.body.html}`;
