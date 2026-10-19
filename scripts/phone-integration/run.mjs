@@ -49,7 +49,10 @@ let stack,
   reversePort,
   installed = false;
 let stage = "preflight";
-const adb = (...args) => command("adb", ["-s", serial, ...args]);
+const adb = (...args) =>
+  command("adb", ["-s", serial, ...args], {
+    timeout: args[0] === "install" ? 120000 : 20000,
+  });
 async function execute(
   file,
   args,
@@ -71,26 +74,31 @@ async function execute(
     }
   });
   child.stderr.on("data", (b) => chunks.push(b));
-  let timedOut = false;
-  const timer = setTimeout(() => {
-    timedOut = true;
-    try {
-      if (process.platform !== "win32") process.kill(-child.pid, "SIGKILL");
-      else child.kill("SIGKILL");
-    } catch (error) {
-      if (error.code !== "ESRCH") child.kill("SIGKILL");
-    }
-    child.stdout.destroy();
-    child.stderr.destroy();
-  }, timeout);
-  const [code] = await once(child, "close");
-  clearTimeout(timer);
-  if (log) writeFileSync(log, Buffer.concat(chunks));
-  assert.equal(
-    timedOut,
-    false,
-    `${path.basename(file)} timed out during ${stage}`,
-  );
+  let timer;
+  let code;
+  try {
+    [code] = await Promise.race([
+      once(child, "close"),
+      new Promise((_, reject) => {
+        timer = setTimeout(() => {
+          try {
+            if (process.platform !== "win32")
+              process.kill(-child.pid, "SIGKILL");
+            else child.kill("SIGKILL");
+          } catch (error) {
+            if (error.code !== "ESRCH") child.kill("SIGKILL");
+          }
+          child.stdout.destroy();
+          child.stderr.destroy();
+          // Do not wait for a close event from a stalled descendant or device.
+          reject(new Error(`${path.basename(file)} timed out during ${stage}`));
+        }, timeout);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+    if (log) writeFileSync(log, Buffer.concat(chunks));
+  }
   assert.equal(
     code,
     0,
@@ -354,6 +362,7 @@ try {
           timeout: 120000,
         },
       );
+      console.log(`Native ${stage} step ${sequence}: complete`);
     } catch (error) {
       const diagnostic = redact(
         readFileSync(path.join(stack.root, `maestro-${sequence}.log`), "utf8"),
@@ -503,24 +512,25 @@ try {
       result.status = "passed";
     } catch (error) {
       result.failure = redact(error.message);
+      console.error(`Native ${name}: ${result.failure}`);
       // Preserve only the last screenshot. Secrets are never included in logs or reports.
       if (!name.includes("code")) {
-        command("adb", [
-          "-s",
-          serial,
-          "shell",
-          "screencap",
-          "-p",
-          "/sdcard/tender-e2e.png",
-        ]);
-        command("adb", [
-          "-s",
-          serial,
-          "pull",
-          "/sdcard/tender-e2e.png",
-          path.join(output, `${name}.png`),
-        ]);
-        adb("shell", "rm", "/sdcard/tender-e2e.png");
+        try {
+          adb("shell", "screencap", "-p", "/sdcard/tender-e2e.png");
+          adb(
+            "pull",
+            "/sdcard/tender-e2e.png",
+            path.join(output, `${name}.png`),
+          );
+        } catch {
+          console.error(`Native ${name}: screenshot was unavailable`);
+        } finally {
+          try {
+            adb("shell", "rm", "-f", "/sdcard/tender-e2e.png");
+          } catch {
+            /* The final cleanup remains required. */
+          }
+        }
       }
     } finally {
       try {
@@ -584,6 +594,10 @@ try {
       save();
       console.log(`${name}: ${result.status}; cleanup=${result.cleanup}`);
     }
+    assert.ok(
+      result.cleanup,
+      "Stop after failed case cleanup; do not reuse uncertain state",
+    );
   }
   stage = "native-startup";
   console.log(stage);

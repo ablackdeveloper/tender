@@ -64,6 +64,8 @@ The 19 cases cover first-use setup, empty/invalid email, email code login and re
 
 Each case clears only the test package and creates new `.invalid` accounts through real Auth. Uploaded fixture files have unique names. Backend checks verify password behavior, persisted setup, stored document bytes, foreign-account denial, and account deletion. Case cleanup removes owned uploads/accounts/files and clears the app. Final cleanup uninstalls the test package, removes the adb tunnel, closes HTTPS, and removes the run's containers, volumes, network, and temporary directory. A missing case or failed cleanup prevents a passing report.
 
+Cases that start after setup use a separate client to call the production `complete_onboarding` function, verify the saved profile, and sign out that fixture session. The Android app must then authenticate itself. The first-use case completes setup through the native UI. This avoids marking a nonexistent profile as complete with an update that affects zero rows.
+
 Reports are stored in `scripts/feature-integration/artifacts/native-phone-runs/<run-id>/summary.json`. Disposable passwords remain in memory and enter the native form through Android's input service; they never enter Maestro files or logs. Raw Maestro files with one-time links/codes remain private and are removed with the temporary directory. Uploaded evidence contains build diagnostics, redacted failure logs, and selected failure screenshots. Screens with email codes are excluded. The public workflow does not upload the APK, private TLS key, or raw session data. Permissions start unset so the harness cannot silently grant a permission that a case is meant to test.
 
 Still separate from emulator evidence: physical camera/microphone quality, interrupted media upload retry, inspection of encrypted device files, push delivery, enrolled biometrics, screen-reader and large-text acceptance, iOS, and external OAuth providers. Do not infer physical-device or store readiness from an emulator pass. No personal stored password or passkey is used.
@@ -71,6 +73,8 @@ Still separate from emulator evidence: physical camera/microphone quality, inter
 ## CI
 
 `.github/workflows/user-flows.yml` runs browser integration on Linux, native database/API/Auth/password integration on Windows, and Storage/account integration on Linux with Docker. Jobs upload available reports even on failure. No hosted account or project secret is required. See the run-specific evidence below; a local pass alone does not prove a GitHub run.
+
+The regression jobs passed again in [CI run 39188354134](https://github.com/ablackdeveloper/tender/actions/runs/39188354134) at commit `89641c5`. The downloaded reports confirm 36 service cases, 20 password cases, and 13 Storage cases, with cleanup verified. The browser and database/API jobs also passed. These results do not replace the separate Android E2E result.
 
 ## Password and Storage follow-up: 18 October 2026
 
