@@ -228,29 +228,56 @@ try {
   assert.match(adb("shell", "pm", "path", appId), /^package:/);
   // No build artifacts or raw Maestro logs with test credentials are uploaded.
   const maestro = process.env.MAESTRO_BIN ?? "maestro";
+  const secrets = new Set();
+  const redact = (value) => {
+    let text = value;
+    for (const secret of [...secrets].sort((a, b) => b.length - a.length))
+      text = text.split(secret).join("[REDACTED]");
+    return text.replace(
+      /eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g,
+      "[JWT]",
+    );
+  };
   let sequence = 0;
   async function ui(commands) {
+    for (const entry of commands) {
+      if (typeof entry.inputText === "string") secrets.add(entry.inputText);
+      if (entry.openLink?.link) secrets.add(entry.openLink.link);
+    }
     const file = path.join(stack.root, `flow-${++sequence}.yaml`);
     writeFileSync(
       file,
       `appId: ${appId}\n---\n${JSON.stringify(commands, null, 2)}\n`,
       { mode: 0o600 },
     );
-    await execute(
-      maestro,
-      [
-        "--device",
-        serial,
-        "test",
-        "--test-output-dir",
-        path.join(stack.root, `maestro-${sequence}`),
-        file,
-      ],
-      {
-        log: path.join(stack.root, `maestro-${sequence}.log`),
-        timeout: 240000,
-      },
-    );
+    try {
+      await execute(
+        maestro,
+        [
+          "--device",
+          serial,
+          "test",
+          "--test-output-dir",
+          path.join(stack.root, `maestro-${sequence}`),
+          file,
+        ],
+        {
+          log: path.join(stack.root, `maestro-${sequence}.log`),
+          timeout: 240000,
+        },
+      );
+    } catch (error) {
+      writeFileSync(
+        path.join(output, `${stage}-maestro.log`),
+        redact(
+          readFileSync(
+            path.join(stack.root, `maestro-${sequence}.log`),
+            "utf8",
+          ),
+        ),
+      );
+      throw error;
+    }
   }
   const clear = () =>
     assert.equal(adb("shell", "pm", "clear", appId).trim(), "Success");
@@ -258,6 +285,26 @@ try {
     stage = name;
     console.log(`Native case: ${name}`);
     const users = [];
+    const deviceFiles = [];
+    const fixture = (extension, bytes) => {
+      assert.ok(["pdf", "png"].includes(extension));
+      const name = `tender-${randomUUID()}.${extension}`;
+      const local = path.join(stack.root, name);
+      const remote = `/sdcard/Download/${name}`;
+      writeFileSync(local, bytes);
+      deviceFiles.push(remote);
+      adb("push", local, remote);
+      adb(
+        "shell",
+        "am",
+        "broadcast",
+        "-a",
+        "android.intent.action.MEDIA_SCANNER_SCAN_FILE",
+        "-d",
+        `file://${remote}`,
+      );
+      return name;
+    };
     const result = { name, status: "failed", cleanup: false };
     const fresh = async ({ complete = true } = {}) => {
       const email = `phone-${randomUUID()}@example.invalid`,
@@ -274,6 +321,8 @@ try {
         password,
         pregnancy: randomUUID(),
       };
+      secrets.add(email);
+      secrets.add(password);
       users.push(user);
       if (complete) {
         assert.ifError(
@@ -289,14 +338,12 @@ try {
         );
         assert.ifError(
           (
-            await stack.admin
-              .from("pregnancies")
-              .insert({
-                id: user.pregnancy,
-                owner_id: user.id,
-                timezone: "UTC",
-                due_date_source: "unknown",
-              })
+            await stack.admin.from("pregnancies").insert({
+              id: user.pregnancy,
+              owner_id: user.id,
+              timezone: "UTC",
+              due_date_source: "unknown",
+            })
           ).error,
         );
       }
@@ -314,37 +361,64 @@ try {
           },
         },
       ]);
-      await fn({ user, fresh, ui, adb, stack, appId });
+      await fn({ user, fresh, ui, adb, stack, appId, fixture });
       result.status = "passed";
     } catch (error) {
-      result.failure =
-        error.code === "ERR_ASSERTION"
-          ? "UI or backend assertion failed"
-          : "Native flow failed";
+      result.failure = redact(error.message);
       // Preserve only the last screenshot. Secrets are never included in logs or reports.
-      const shot = adb("exec-out", "screencap", "-p");
-      // Binary screenshots are captured separately by adb below.
-      void shot;
-      command("adb", [
-        "-s",
-        serial,
-        "shell",
-        "screencap",
-        "-p",
-        "/sdcard/tender-e2e.png",
-      ]);
-      command("adb", [
-        "-s",
-        serial,
-        "pull",
-        "/sdcard/tender-e2e.png",
-        path.join(output, `${name}.png`),
-      ]);
-      adb("shell", "rm", "/sdcard/tender-e2e.png");
+      if (!name.includes("code")) {
+        command("adb", [
+          "-s",
+          serial,
+          "shell",
+          "screencap",
+          "-p",
+          "/sdcard/tender-e2e.png",
+        ]);
+        command("adb", [
+          "-s",
+          serial,
+          "pull",
+          "/sdcard/tender-e2e.png",
+          path.join(output, `${name}.png`),
+        ]);
+        adb("shell", "rm", "/sdcard/tender-e2e.png");
+      }
     } finally {
       try {
         clear();
+        for (const file of deviceFiles) {
+          assert.match(
+            file,
+            /^\/sdcard\/Download\/tender-[a-f0-9-]+\.(pdf|png)$/,
+          );
+          adb("shell", "rm", file);
+          adb("shell", "test", "!", "-e", file);
+        }
         for (const user of users) {
+          for (const table of ["documents", "media_assets"]) {
+            const assets = await stack.admin
+              .from(table)
+              .select("storage_bucket,storage_path")
+              .eq("owner_id", user.id);
+            assert.ifError(assets.error);
+            for (const asset of assets.data) {
+              assert.ifError(
+                (
+                  await stack.admin.storage
+                    .from(asset.storage_bucket)
+                    .remove([asset.storage_path])
+                ).error,
+              );
+              assert.ok(
+                (
+                  await stack.admin.storage
+                    .from(asset.storage_bucket)
+                    .download(asset.storage_path)
+                ).error,
+              );
+            }
+          }
           const existing = await stack.admin.auth.admin.getUserById(user.id);
           if (existing.data.user)
             assert.ifError(
@@ -370,6 +444,7 @@ try {
   }
   await runFlows({ scenario });
 } catch (error) {
+  if (error.cleanupFailed) report.setupCleanupFailed = true;
   report.error = `${stage}: ${error.message}`;
   console.error(report.error);
 } finally {
@@ -385,7 +460,7 @@ try {
       await new Promise((r) => server.close(r));
     }
     if (stack) await stack.close();
-    report.cleanup = true;
+    report.cleanup = !report.setupCleanupFailed;
   } catch {
     report.cleanup = false;
     report.cleanupError = "Owned test resources could not all be removed";

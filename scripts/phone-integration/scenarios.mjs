@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
 
-export const scenarioCount = 14;
+export const scenarioCount = 19;
 const visible = (text) => ({
   extendedWaitUntil: { visible: text, timeout: 30000 },
 });
@@ -13,7 +13,7 @@ const field = (label, text) => [
 ];
 const link = (url) => ({ openLink: { link: url, autoVerify: true } });
 const privacy = [link("tender://privacy-data"), visible("Privacy and data")];
-async function login(ctx, type = "magiclink") {
+async function login(ctx, type = "magiclink", destination = "Today") {
   const generated = await ctx.stack.admin.auth.admin.generateLink({
     type,
     email: ctx.user.email,
@@ -22,7 +22,7 @@ async function login(ctx, type = "magiclink") {
   const url = `tender://auth/callback?token_hash=${generated.data.properties.hashed_token}&type=${type}`;
   await ctx.ui([
     link(url),
-    visible(type === "recovery" ? "Choose a new password" : ".*"),
+    visible(type === "recovery" ? "Choose a new password" : destination),
   ]);
   return url;
 }
@@ -67,6 +67,35 @@ async function readMail(ctx) {
   throw new Error("Disposable mailbox did not receive the requested email");
 }
 export async function runFlows({ scenario }) {
+  await scenario("first-use-onboarding", async (c) => {
+    const user = await c.fresh({ complete: false });
+    await login({ ...c, user }, "magiclink", "Setting your due date");
+    await c.ui([
+      tap("Not sure yet.*skip"),
+      visible("Pregnancy information"),
+      tap("Continue"),
+      visible("Choose your home focus"),
+      tap("Continue"),
+      visible("How we handle your information"),
+      tap("Got it"),
+      visible("Flutterings is ready"),
+      tap("Finish setup"),
+      visible("Today"),
+    ]);
+    const profile = await c.stack.admin
+      .from("profiles")
+      .select("onboarding_completed_at")
+      .eq("id", user.id)
+      .single();
+    assert.ifError(profile.error);
+    assert.ok(profile.data.onboarding_completed_at);
+    await c.ui([
+      { stopApp: {} },
+      { launchApp: { clearState: false } },
+      visible("Today"),
+      { assertNotVisible: "Setting your due date" },
+    ]);
+  });
   await scenario("empty-email", async (c) => {
     await c.ui([
       tap("Email me a sign-in link or code"),
@@ -208,12 +237,10 @@ export async function runFlows({ scenario }) {
     ]);
     assert.ifError(
       (
-        await c.stack
-          .client()
-          .auth.signInWithPassword({
-            email: c.user.email,
-            password: c.user.password,
-          })
+        await c.stack.client().auth.signInWithPassword({
+          email: c.user.email,
+          password: c.user.password,
+        })
       ).error,
     );
   });
@@ -235,12 +262,10 @@ export async function runFlows({ scenario }) {
     );
     assert.equal(
       (
-        await c.stack
-          .client()
-          .auth.signInWithPassword({
-            email: c.user.email,
-            password: c.user.password,
-          })
+        await c.stack.client().auth.signInWithPassword({
+          email: c.user.email,
+          password: c.user.password,
+        })
       ).error?.code,
       "invalid_credentials",
     );
@@ -266,5 +291,112 @@ export async function runFlows({ scenario }) {
       (await c.stack.admin.auth.admin.getUserById(other.id)).data.user?.id,
       other.id,
     );
+  });
+  const documentForm = [
+    link("tender://care"),
+    visible("Care"),
+    tap("Records"),
+    {
+      scrollUntilVisible: {
+        element: { id: "field-document-title" },
+        direction: "DOWN",
+        timeout: 30000,
+      },
+    },
+  ];
+  await scenario("document-picker-cancel", async (c) => {
+    await login(c);
+    await c.ui([
+      ...documentForm,
+      ...field("document-title", "Synthetic cancelled document"),
+      tap("Choose and upload document"),
+      { back: {} },
+      visible("Choose and upload document"),
+    ]);
+    const rows = await c.stack.admin
+      .from("documents")
+      .select("id")
+      .eq("owner_id", c.user.id);
+    assert.ifError(rows.error);
+    assert.equal(rows.data.length, 0);
+  });
+  await scenario("document-upload-native-picker", async (c) => {
+    const bytes = Buffer.from(
+      "%PDF-1.4\n% Synthetic phone E2E document\n1 0 obj<</Type/Catalog>>endobj\n%%EOF",
+    );
+    const name = c.fixture("pdf", bytes);
+    await login(c);
+    await c.ui([
+      ...documentForm,
+      ...field("document-title", "Synthetic private document"),
+      tap("Choose and upload document"),
+      tap("Show roots"),
+      tap("Downloads"),
+      tap(name),
+      visible("Open private document"),
+    ]);
+    const row = await c.stack.admin
+      .from("documents")
+      .select("*")
+      .eq("owner_id", c.user.id)
+      .single();
+    assert.ifError(row.error);
+    assert.equal(row.data.upload_status, "ready");
+    const stored = await c.stack.admin.storage
+      .from(row.data.storage_bucket)
+      .download(row.data.storage_path);
+    assert.ifError(stored.error);
+    assert.deepEqual(Buffer.from(await stored.data.arrayBuffer()), bytes);
+    const stranger = await c.fresh();
+    const other = c.stack.client();
+    assert.ifError(
+      (
+        await other.auth.signInWithPassword({
+          email: stranger.email,
+          password: stranger.password,
+        })
+      ).error,
+    );
+    assert.ok(
+      (
+        await other.storage
+          .from(row.data.storage_bucket)
+          .download(row.data.storage_path)
+      ).error,
+    );
+  });
+  await scenario("export-native-share-sheet", async (c) => {
+    await signedIn(c);
+    await c.ui([
+      {
+        scrollUntilVisible: {
+          element: "Create and share export",
+          direction: "DOWN",
+        },
+      },
+      tap("Create and share export"),
+      visible(".*tender-account-export.*"),
+      { back: {} },
+      visible("Your account export was prepared in the system share sheet."),
+    ]);
+    await accountExists(c);
+  });
+  await scenario("microphone-permission-denial", async (c) => {
+    await login(c);
+    await c.ui([
+      link("tender://journal/new"),
+      {
+        scrollUntilVisible: { element: "Record voice note", direction: "DOWN" },
+      },
+      tap("Record voice note"),
+      tap("Don.t allow"),
+      visible("Microphone permission was not granted."),
+    ]);
+    const rows = await c.stack.admin
+      .from("media_assets")
+      .select("id")
+      .eq("owner_id", c.user.id);
+    assert.ifError(rows.error);
+    assert.equal(rows.data.length, 0);
   });
 }

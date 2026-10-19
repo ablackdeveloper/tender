@@ -8,6 +8,7 @@ import {
   writeFileSync,
   rmSync,
   existsSync,
+  realpathSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -25,19 +26,44 @@ export function command(file, args, options = {}) {
     ...options,
   });
   // Never include arguments or raw output: both can contain disposable credentials.
-  assert.equal(
-    r.status,
-    0,
-    `${path.basename(file)} failed (${r.status ?? r.error?.code})`,
-  );
+  if (r.status !== 0) {
+    const diagnostic = (r.stderr ?? "")
+      .slice(-2000)
+      .replace(/eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g, "[JWT]")
+      .replace(/sb_(?:secret|publishable)_[A-Za-z0-9_-]+/g, "[KEY]")
+      .replace(/postgres(?:ql)?:\/\/[^\s]+/g, "[DATABASE URL]");
+    throw new Error(
+      `${path.basename(file)} failed (${r.status ?? r.error?.code}): ${diagnostic}`,
+    );
+  }
   return r.stdout;
 }
 export async function startStack() {
   const id = `p-${randomUUID()}`;
   const root = mkdtempSync(path.join(tmpdir(), "tender-phone-"));
   const project = path.join(root, "supabase");
-  const env = { ...process.env, SUPABASE_HOME: path.join(root, "cli-state") };
-  const cli = path.join(workspace, "node_modules/supabase/bin/supabase");
+  const env = {
+    ...Object.fromEntries(
+      Object.entries(process.env).filter(([key]) =>
+        /^(PATH|HOME|TMPDIR|DOCKER_HOST|DOCKER_CONTEXT|DOCKER_CONFIG)$/i.test(
+          key,
+        ),
+      ),
+    ),
+    SUPABASE_TELEMETRY_DISABLED: "true",
+    SUPABASE_HOME: path.join(root, "cli-state"),
+  };
+  const cliRequire = createRequire(
+    realpathSync(
+      path.join(workspace, "node_modules/supabase/dist/supabase.js"),
+    ),
+  );
+  const cli = path.join(
+    path.dirname(
+      cliRequire.resolve(`@supabase/cli-linux-${process.arch}/package.json`),
+    ),
+    "bin/supabase",
+  );
   const supabase = (...args) =>
     command(cli, ["--workdir", root, ...args], { env, timeout: 600000 });
   let started = false,
@@ -239,7 +265,11 @@ verify_jwt = true
       close,
     };
   } catch (error) {
-    await close();
+    try {
+      await close();
+    } catch {
+      error.cleanupFailed = true;
+    }
     throw error;
   }
 }
