@@ -6,26 +6,27 @@ import { Screen } from "@/components/layout/screen";
 import { AppText, ErrorState, Skeleton } from "@/components/ui";
 import { trackAnalytics } from "@/services/analytics/analytics";
 import { createSessionFromUrl } from "@/services/auth/auth-callback";
+import { useAuth } from "@/providers/auth-provider";
 
 export default function AuthCallbackScreen() {
   const url = Linking.useLinkingURL();
   const router = useRouter();
+  const { markRecoverySession } = useAuth();
   const [error, setError] = useState(false);
 
   useEffect(() => {
     if (!url) return;
     let active = true;
     void createSessionFromUrl(url)
-      .then(() => {
+      .then(async () => {
+        if (!active) return;
+        const recovery = /(?:[?#&])(?:type|mode)=recovery(?:[&#]|$)/.test(url);
+        if (recovery) await markRecoverySession();
         if (!active) return;
         trackAnalytics("auth_callback_completed", {
           method: url.includes("provider=") ? "oauth" : "email",
         });
-        router.replace(
-          url.includes("type=recovery") || url.includes("mode=recovery")
-            ? "/auth/update-password"
-            : "/",
-        );
+        router.replace(recovery ? "/auth/update-password" : "/");
       })
       .catch(() => {
         if (active) setError(true);
@@ -33,7 +34,7 @@ export default function AuthCallbackScreen() {
     return () => {
       active = false;
     };
-  }, [router, url]);
+  }, [markRecoverySession, router, url]);
 
   return (
     <Screen contentContainerStyle={{ justifyContent: "center" }}>

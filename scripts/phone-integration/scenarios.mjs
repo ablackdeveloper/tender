@@ -250,7 +250,26 @@ export async function runFlows({ scenario }) {
     );
   });
   await scenario("password-replacement", async (c) => {
-    await login(c, "recovery");
+    await c.ui([
+      tap("Recover account access"),
+      ...field("email-address", c.user.email),
+      tap("Send recovery email"),
+      visible("If recovery is available, an email is on its way."),
+    ]);
+    const mail = await readMail(c);
+    const emailLink = mail
+      .match(/https?:\/\/[^\s"<>]+\/auth\/v1\/verify\?[^\s"<>]+/)?.[0]
+      ?.replaceAll("&amp;", "&");
+    assert.ok(emailLink, "Recovery email must contain its verification URL");
+    assert.equal(new URL(emailLink).origin, c.stack.apiUrl);
+    const response = await fetch(emailLink, {
+      redirect: "manual",
+      signal: AbortSignal.timeout(15000),
+    });
+    assert.equal(response.status, 303);
+    const callback = response.headers.get("location");
+    assert.ok(callback?.startsWith("tender://auth/callback"));
+    await c.ui([link(callback), visible("Choose a new password")]);
     const next = `Bb2@${randomBytes(24).toString("hex")}`;
     await c.ui([
       ...field("new-password", next),

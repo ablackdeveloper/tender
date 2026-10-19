@@ -25,6 +25,7 @@ type AuthContextValue = {
   initialized: boolean;
   completeAccountDeletion: () => Promise<void>;
   isRecovery: boolean;
+  markRecoverySession: () => Promise<void>;
   onboardingComplete: boolean | null;
   onboardingError: boolean;
   refreshOnboarding: () => Promise<void>;
@@ -41,6 +42,14 @@ export function AuthProvider({ children }: PropsWithChildren) {
   const [onboardingComplete, setOnboardingComplete] = useState<boolean | null>(null);
   const [onboardingError, setOnboardingError] = useState(false);
   const [session, setSession] = useState<Session | null>(null);
+
+  const markRecoverySession = useCallback(async () => {
+    // The callback must first validate the email link with Auth. Token-fragment
+    // callbacks emit SIGNED_IN, so the UI recovery state needs this explicit step.
+    const { data, error } = await supabase.auth.getSession();
+    if (error || !data.session) throw new Error("Recovery session is unavailable.");
+    setIsRecovery(true);
+  }, []);
 
   const refreshOnboarding = useCallback(async () => {
     if (!session) {
@@ -145,6 +154,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
       initialized,
       completeAccountDeletion,
       isRecovery,
+      markRecoverySession,
       onboardingComplete,
       onboardingError,
       refreshOnboarding,
@@ -155,6 +165,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
       initialized,
       completeAccountDeletion,
       isRecovery,
+      markRecoverySession,
       onboardingComplete,
       onboardingError,
       refreshOnboarding,

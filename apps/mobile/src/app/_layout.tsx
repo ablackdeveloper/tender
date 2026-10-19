@@ -54,7 +54,9 @@ function Navigation() {
     );
   }
 
-  if (!initialized || (session && onboardingComplete === null)) return null;
+  // Keep the callback mounted while its new session loads setup status. The
+  // entry route supplies the loading state; protected screens remain gated.
+  if (!initialized) return null;
 
   return (
     <>
@@ -70,7 +72,7 @@ function Navigation() {
         <Stack.Protected guard={!session}>
           <Stack.Screen name="(auth)" />
         </Stack.Protected>
-        <Stack.Protected guard={Boolean(session && !onboardingComplete)}>
+        <Stack.Protected guard={Boolean(session && onboardingComplete === false)}>
           <Stack.Screen name="onboarding" />
         </Stack.Protected>
         <Stack.Protected guard={Boolean(session)}>
