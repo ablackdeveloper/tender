@@ -299,7 +299,7 @@ verify_jwt = true
       assert.ifError(inserted.error);
       return { id: created.data.user.id, client: c, pregnancy };
     };
-    const register = async (user, bucket) => {
+    const register = async (user, bucket, status = "ready") => {
       const asset = randomUUID(),
         key = `${asset}/${randomUUID()}.${bucket === "tender-media" ? "jpg" : "pdf"}`;
       const row = {
@@ -310,7 +310,7 @@ verify_jwt = true
         storage_path: key,
         mime_type: bucket === "tender-media" ? "image/jpeg" : "application/pdf",
         byte_size: payload.length,
-        upload_status: "ready",
+        upload_status: status,
       };
       const table = bucket === "tender-media" ? "media_assets" : "documents";
       if (table === "documents")
@@ -367,6 +367,38 @@ verify_jwt = true
     console.log(`${failure ? "FAIL" : "PASS"} ${name}`);
   }
   for (const bucket of ["tender-documents", "tender-media"]) {
+    await scenario(
+      `${bucket}-pending-first-upload-and-ready`,
+      async ({ fresh, register }) => {
+        const user = await fresh();
+        const object = await register(user, bucket, "pending");
+        const storage = user.client.storage.from(bucket);
+        // Match the native upload request while the record is still pending.
+        assert.ifError(
+          (
+            await storage.upload(object.key, payload, {
+              contentType: object.mime,
+              upsert: true,
+            })
+          ).error,
+        );
+        assert.ok((await storage.download(object.key)).error);
+        const stored = await admin.storage.from(bucket).download(object.key);
+        assert.ifError(stored.error);
+        assert.deepEqual(Buffer.from(await stored.data.arrayBuffer()), payload);
+        assert.ifError(
+          (
+            await user.client
+              .from(object.table)
+              .update({ upload_status: "ready" })
+              .eq("id", object.id)
+          ).error,
+        );
+        const ready = await storage.download(object.key);
+        assert.ifError(ready.error);
+        assert.deepEqual(Buffer.from(await ready.data.arrayBuffer()), payload);
+      },
+    );
     await scenario(
       `${bucket}-upload-download-and-upsert`,
       async ({ fresh, register }) => {
@@ -574,7 +606,7 @@ verify_jwt = true
   );
   for (const c of clients) c.auth.stopAutoRefresh();
   report.status =
-    report.results.length === 13 &&
+    report.results.length === 15 &&
     report.results.every((r) => r.status === "passed")
       ? "passed"
       : "failed";
