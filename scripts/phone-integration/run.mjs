@@ -172,6 +172,38 @@ try {
           headers: { ...req.headers, host: new URL(stack.apiUrl).host },
         },
         (response) => {
+          const category = req.url.startsWith("/storage/v1/object/")
+            ? "storage-object"
+            : req.url.startsWith("/rest/v1/documents")
+              ? "documents"
+              : null;
+          if (category) {
+            console.log(
+              `Native ${stage}: ${req.method} ${category} -> ${response.statusCode}`,
+            );
+            if (response.statusCode >= 400) {
+              const parts = [];
+              let size = 0;
+              response.on("data", (chunk) => {
+                size += chunk.length;
+                if (size <= 8192) parts.push(chunk);
+              });
+              response.on("end", () => {
+                try {
+                  const code = JSON.parse(Buffer.concat(parts).toString()).code;
+                  if (
+                    typeof code === "string" &&
+                    /^(?:[0-9A-Z]{5}|PGRST\d{3}|[a-z_]{3,64})$/.test(code)
+                  )
+                    console.error(
+                      `Native ${stage}: ${category} error code ${code}`,
+                    );
+                } catch {
+                  /* Never expose raw response bodies, paths, or headers. */
+                }
+              });
+            }
+          }
           res.writeHead(response.statusCode, response.headers);
           response.pipe(res);
         },
@@ -598,6 +630,11 @@ try {
       result.cleanup,
       "Stop after failed case cleanup; do not reuse uncertain state",
     );
+    assert.equal(
+      result.status,
+      "passed",
+      `Stop after failed native case: ${name}`,
+    );
   }
   stage = "native-startup";
   console.log(stage);
@@ -607,7 +644,22 @@ try {
       extendedWaitUntil: { visible: "Welcome to Flutterings", timeout: 30000 },
     },
   ]);
-  await runFlows({ scenario });
+  const flows = [];
+  await runFlows({ scenario: async (name, fn) => flows.push({ name, fn }) });
+  assert.equal(flows.length, scenarioCount);
+  assert.equal(new Set(flows.map(({ name }) => name)).size, scenarioCount);
+  // Run device-boundary cases first to expose native failures before repeating
+  // the longer account sequence. Every passing run still requires all 19 cases.
+  const deviceCases = new Set([
+    "document-picker-cancel",
+    "document-upload-native-picker",
+    "export-native-share-sheet",
+    "microphone-permission-denial",
+  ]);
+  flows.sort(
+    (a, b) => Number(deviceCases.has(b.name)) - Number(deviceCases.has(a.name)),
+  );
+  for (const flow of flows) await scenario(flow.name, flow.fn);
 } catch (error) {
   if (error.cleanupFailed) report.setupCleanupFailed = true;
   report.error = `${stage}: ${error.message}`;

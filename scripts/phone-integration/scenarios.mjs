@@ -6,6 +6,14 @@ const visible = (text) => ({
   extendedWaitUntil: { visible: text, timeout: 30000 },
 });
 const tap = (text) => ({ tapOn: text });
+const scrollTo = (element, direction = "DOWN") => ({
+  scrollUntilVisible: {
+    element,
+    direction,
+    timeout: 30000,
+    centerElement: true,
+  },
+});
 const field = (label, text) => [
   { tapOn: { id: `field-${label}` } },
   label.includes("password") ? { inputSecret: text } : { inputText: text },
@@ -343,8 +351,11 @@ export async function runFlows({ scenario }) {
     await c.ui([
       ...documentForm,
       ...field("document-title", "Synthetic cancelled document"),
+      scrollTo("Choose and upload document"),
       tap("Choose and upload document"),
+      visible("Show roots"),
       { back: {} },
+      scrollTo("Choose and upload document"),
       visible("Choose and upload document"),
     ]);
     const rows = await c.stack.admin
@@ -363,10 +374,39 @@ export async function runFlows({ scenario }) {
     await c.ui([
       ...documentForm,
       ...field("document-title", "Synthetic private document"),
+      scrollTo("Choose and upload document"),
       tap("Choose and upload document"),
       tap("Show roots"),
       tap("Downloads"),
       tap(name),
+    ]);
+    // Check durable state before the viewport assertion, so an upload failure
+    // cannot be mistaken for an off-screen result after the system picker closes.
+    let state = [];
+    const deadline = Date.now() + 30000;
+    while (Date.now() < deadline) {
+      const result = await c.stack.admin
+        .from("documents")
+        .select("upload_status,upload_error_code")
+        .eq("owner_id", c.user.id);
+      assert.ifError(result.error);
+      state = result.data;
+      if (state.some((row) => ["ready", "failed"].includes(row.upload_status)))
+        break;
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    }
+    assert.equal(
+      state.length,
+      1,
+      "Native picker must create one document record",
+    );
+    assert.equal(
+      state[0].upload_status,
+      "ready",
+      `Native upload status: ${state[0].upload_status}; code: ${state[0].upload_error_code ?? "none"}`,
+    );
+    await c.ui([
+      scrollTo("Open private document"),
       visible("Open private document"),
     ]);
     const row = await c.stack.admin
@@ -411,6 +451,10 @@ export async function runFlows({ scenario }) {
       tap("Create and share export"),
       visible(".*tender-account-export.*"),
       { back: {} },
+      scrollTo(
+        "Your account export was prepared in the system share sheet.",
+        "UP",
+      ),
       visible("Your account export was prepared in the system share sheet."),
     ]);
     await accountExists(c);
@@ -424,6 +468,7 @@ export async function runFlows({ scenario }) {
       },
       tap("Record voice note"),
       tap("Don.t allow"),
+      scrollTo("Microphone permission was not granted."),
       visible("Microphone permission was not granted."),
     ]);
     const rows = await c.stack.admin
