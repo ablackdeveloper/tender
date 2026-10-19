@@ -23,6 +23,7 @@ export function command(file, args, options = {}) {
   const r = spawnSync(file, args, {
     encoding: "utf8",
     timeout: 180000,
+    maxBuffer: 8 * 1024 * 1024,
     ...options,
   });
   // Never include arguments or raw output: both can contain disposable credentials.

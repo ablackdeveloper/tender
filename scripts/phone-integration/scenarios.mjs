@@ -8,7 +8,7 @@ const visible = (text) => ({
 const tap = (text) => ({ tapOn: text });
 const field = (label, text) => [
   { tapOn: { id: `field-${label}` } },
-  { inputText: text },
+  label.includes("password") ? { inputSecret: text } : { inputText: text },
   { hideKeyboard: {} },
 ];
 const link = (url) => ({ openLink: { link: url, autoVerify: true } });
@@ -235,7 +235,7 @@ export async function runFlows({ scenario }) {
       visible("Use at least 12 characters."),
       { tapOn: { id: "field-new-password" } },
       { eraseText: 100 },
-      { inputText: `Aa1!${randomBytes(12).toString("hex")}` },
+      { inputSecret: `Aa1!${randomBytes(12).toString("hex")}` },
       { hideKeyboard: {} },
       tap("Update password"),
       visible("Passwords do not match."),

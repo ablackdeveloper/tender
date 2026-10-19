@@ -61,7 +61,14 @@ async function execute(
     stdio: ["ignore", "pipe", "pipe"],
   });
   const chunks = [];
-  child.stdout.on("data", (b) => chunks.push(b));
+  child.stdout.on("data", (b) => {
+    chunks.push(b);
+    if (stage === "Android APK build") {
+      for (const line of b.toString().split(/\r?\n/))
+        if (/^> Task :[A-Za-z0-9:_-]+(?: [A-Z-]+)?$/.test(line))
+          console.log(line);
+    }
+  });
   child.stderr.on("data", (b) => chunks.push(b));
   const timer = setTimeout(() => child.kill("SIGKILL"), timeout);
   const [code] = await once(child, "close");
@@ -240,7 +247,34 @@ try {
   };
   let sequence = 0;
   async function ui(commands) {
+    // Passwords go through Android's input service without entering a Maestro
+    // file or driver log. The app still receives normal native keyboard input.
+    if (commands.some((entry) => entry.inputSecret !== undefined)) {
+      let batch = [];
+      for (const entry of commands) {
+        if (entry.inputSecret === undefined) {
+          batch.push(entry);
+          continue;
+        }
+        secrets.add(entry.inputSecret);
+        if (batch.length) await ui(batch);
+        batch = [];
+        assert.match(
+          entry.inputSecret,
+          /^[A-Za-z0-9!@#$]+$/,
+          "Unsupported disposable password characters",
+        );
+        try {
+          adb("shell", "input", "text", `'${entry.inputSecret}'`);
+        } catch {
+          throw new Error("Native password input failed");
+        }
+      }
+      if (batch.length) await ui(batch);
+      return;
+    }
     for (const entry of commands) {
+      if (entry.launchApp) entry.launchApp.permissions ??= { all: "unset" };
       if (typeof entry.inputText === "string") secrets.add(entry.inputText);
       if (entry.openLink?.link) secrets.add(entry.openLink.link);
     }
@@ -440,6 +474,7 @@ try {
         result.failure = "Case cleanup failed";
       }
       report.results.push(result);
+      secrets.clear();
       save();
       console.log(`${name}: ${result.status}; cleanup=${result.cleanup}`);
     }
