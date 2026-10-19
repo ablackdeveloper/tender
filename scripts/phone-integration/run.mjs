@@ -199,7 +199,7 @@ try {
   cpSync(cert, path.join(main, "res/raw/tender_test_ca.pem"));
   writeFileSync(
     path.join(main, "res/xml/tender_test_network.xml"),
-    '<network-security-config><base-config cleartextTrafficPermitted="false"><trust-anchors><certificates src="system"/></trust-anchors></base-config><domain-config cleartextTrafficPermitted="false"><domain>localhost</domain><trust-anchors><certificates src="@raw/tender_test_ca"/></trust-anchors></domain-config></network-security-config>',
+    '<network-security-config><base-config cleartextTrafficPermitted="false"><trust-anchors><certificates src="system"/></trust-anchors></base-config><domain-config cleartextTrafficPermitted="false"><domain includeSubdomains="false">localhost</domain><trust-anchors><certificates src="@raw/tender_test_ca"/></trust-anchors></domain-config></network-security-config>',
   );
   const manifest = path.join(main, "AndroidManifest.xml");
   writeFileSync(
@@ -479,11 +479,32 @@ try {
       console.log(`${name}: ${result.status}; cleanup=${result.cleanup}`);
     }
   }
+  stage = "native-startup";
+  console.log(stage);
+  await ui([
+    { launchApp: { clearState: true } },
+    {
+      extendedWaitUntil: { visible: "Welcome to Flutterings", timeout: 30000 },
+    },
+  ]);
   await runFlows({ scenario });
 } catch (error) {
   if (error.cleanupFailed) report.setupCleanupFailed = true;
   report.error = `${stage}: ${error.message}`;
   console.error(report.error);
+  if (installed && stage === "native-startup") {
+    try {
+      adb("shell", "screencap", "-p", "/sdcard/tender-e2e.png");
+      adb(
+        "pull",
+        "/sdcard/tender-e2e.png",
+        path.join(output, "native-startup.png"),
+      );
+      adb("shell", "rm", "/sdcard/tender-e2e.png");
+    } catch {
+      /* The failed report already records startup failure. */
+    }
+  }
 } finally {
   try {
     if (installed) {
