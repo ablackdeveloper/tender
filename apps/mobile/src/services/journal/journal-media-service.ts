@@ -160,7 +160,9 @@ export const journalMediaService = {
         Authorization: `Bearer ${sessionResult.data.session.access_token}`,
         apikey: env.EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY,
         "Content-Type": job.mimeType,
-        "x-upsert": "true",
+        // New private assets use unique keys. Never require read access to a
+        // pending object or overwrite bytes after an uncertain earlier attempt.
+        "x-upsert": "false",
       },
       httpMethod: "POST",
       mimeType: job.mimeType,

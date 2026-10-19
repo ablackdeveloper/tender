@@ -76,7 +76,9 @@ export const documentService = {
           Authorization: `Bearer ${session.data.session.access_token}`,
           apikey: env.EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY,
           "Content-Type": job.mimeType,
-          "x-upsert": "true",
+          // Each selected document has a new object key. Pending objects remain
+          // unreadable, so this must not request overwrite/SELECT permission.
+          "x-upsert": "false",
         },
         httpMethod: "POST",
         mimeType: job.mimeType,

@@ -20,13 +20,13 @@ The setup pins Go 1.27.2, Supabase Auth 2.197.0, Deno 2.9.7, the Supabase SDK 2.
 
 ## What the 36 service scenarios prove
 
-| Area | Checks |
-| --- | --- |
-| Login and email | New signup, returning login, normalization, wrong code/email, consumed code, resend, expiry, delivered magic links, token-hash callbacks, and rejected link reuse |
-| PKCE and sessions | Code exchange, missing verifier, reused code, refresh rotation, revoked refresh after sign-out, new-client session restore, and cleared session storage |
-| Recovery and isolation | Recovery email/session, single-use recovery link, generic response for unknown email, invalid email, local SMTP rejection of external recipients, and real JWT database owner isolation |
-| Account export | Anonymous and invalid-token rejection, current-user-only records, audit record, and `Cache-Control: no-store` |
-| Account deletion | Five invalid confirmations, four invalid request bodies, exact confirmation, Auth removal, database cascades, revoked sessions, repeat deletion, preserved second user, and failure when either document or media removal is unavailable |
+| Area                   | Checks                                                                                                                                                                                                                                   |
+| ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Login and email        | New signup, returning login, normalization, wrong code/email, consumed code, resend, expiry, delivered magic links, token-hash callbacks, and rejected link reuse                                                                        |
+| PKCE and sessions      | Code exchange, missing verifier, reused code, refresh rotation, revoked refresh after sign-out, new-client session restore, and cleared session storage                                                                                  |
+| Recovery and isolation | Recovery email/session, single-use recovery link, generic response for unknown email, invalid email, local SMTP rejection of external recipients, and real JWT database owner isolation                                                  |
+| Account export         | Anonymous and invalid-token rejection, current-user-only records, audit record, and `Cache-Control: no-store`                                                                                                                            |
+| Account deletion       | Five invalid confirmations, four invalid request bodies, exact confirmation, Auth removal, database cascades, revoked sessions, repeat deletion, preserved second user, and failure when either document or media removal is unavailable |
 
 The app's production auth service and callback parser make real HTTP calls through the real Supabase SDK to Auth. The harness supplies the native redirect/browser boundaries and disables analytics. Deno runs the unchanged production account function. PostgreSQL runs every application migration. The SQL-only Auth fixture seed is deliberately excluded: all accounts are created through real Auth APIs.
 
@@ -44,9 +44,9 @@ Run `pnpm test:flows:storage` on a host with a working Docker Linux engine. The 
 
 The runner creates a separate Docker network with ports bound to loopback. It checks the port bindings before tests. The network, CLI state, and function process belong only to that run and are removed during cleanup. See the [Supabase local network setup](https://supabase.com/docs/guides/local-development).
 
-The 13 prepared scenarios cover both private buckets: upload/download bytes, replacement upload, denied unregistered upload, denied foreign reads/writes/deletes, pending-file privacy, owner removal, anonymous access, and full account deletion with files in both buckets. They check durable object and account state, not just HTTP success. A second user's file must remain after deletion.
+The 15 scenarios cover both private buckets: upload/download bytes, replacement upload, denied unregistered upload, denied foreign reads/writes/deletes, pending-file privacy, owner removal, anonymous access, and full account deletion with files in both buckets. Two cases start with pending metadata, upload with create-only permission, reject a duplicate without changing the stored bytes, and verify owner access after the status becomes ready. They check durable object and account state, not just HTTP success. A second user's file must remain after deletion.
 
-These 13 scenarios have **not run on this computer**. Firmware virtualization is off and Docker's Linux engine is unavailable. They passed in [CI run 39174985847](https://github.com/ablackdeveloper/tender/actions/runs/39174985847), with cleanup verified. A local readiness failure remains separate from that CI result. See [Supabase runtime support](https://supabase.com/docs/guides/local-development/docker-and-native-runtimes).
+Storage scenarios have **not run on this computer**. Firmware virtualization is off and Docker's Linux engine is unavailable. The original 13 passed in [CI run 39174985847](https://github.com/ablackdeveloper/tender/actions/runs/39174985847), with cleanup verified. The two new pending-upload cases reproduced the native upload failure in run 39195145725 before the create-only fix. Current 15-case results must be read from the matching CI report. A local readiness failure remains separate from that CI result. See [Supabase runtime support](https://supabase.com/docs/guides/local-development/docker-and-native-runtimes).
 
 The native service suite does not have a real Storage HTTP server. It returns an explicit HTTP 503 for Storage requests to prove that the account function stops safely and preserves Auth and metadata. That result does not prove successful uploads or deletion of stored bytes.
 

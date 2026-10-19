@@ -378,7 +378,7 @@ verify_jwt = true
           (
             await storage.upload(object.key, payload, {
               contentType: object.mime,
-              upsert: true,
+              upsert: false,
             })
           ).error,
         );
@@ -386,6 +386,22 @@ verify_jwt = true
         const stored = await admin.storage.from(bucket).download(object.key);
         assert.ifError(stored.error);
         assert.deepEqual(Buffer.from(await stored.data.arrayBuffer()), payload);
+        // An uncertain retry cannot overwrite an unreadable pending object.
+        const repeated = await storage.upload(
+          object.key,
+          Buffer.from("different bytes"),
+          {
+            contentType: object.mime,
+            upsert: false,
+          },
+        );
+        assert.ok(repeated.error);
+        const preserved = await admin.storage.from(bucket).download(object.key);
+        assert.ifError(preserved.error);
+        assert.deepEqual(
+          Buffer.from(await preserved.data.arrayBuffer()),
+          payload,
+        );
         assert.ifError(
           (
             await user.client
