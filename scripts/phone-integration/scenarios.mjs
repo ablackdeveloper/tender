@@ -143,7 +143,7 @@ export async function runFlows({ scenario }) {
       visible("Check your email"),
     ]);
     const mail = await readMail(c),
-      code = mail.match(/\b\d{6,8}\b/)?.[0];
+      code = mail.match(/TEST_CODE:\s*(\d{6,8})\b/)?.[1];
     assert.ok(code, "Email code must exist");
     await c.ui([
       {
@@ -167,7 +167,7 @@ export async function runFlows({ scenario }) {
       tap("Email me a sign-in link or code"),
       visible("Check your email"),
     ]);
-    const code = (await readMail(c)).match(/\b\d{6,8}\b/)?.[0];
+    const code = (await readMail(c)).match(/TEST_CODE:\s*(\d{6,8})\b/)?.[1];
     assert.ok(code, "The requested email must contain a code");
     const invalid = `${(Number(code[0]) + 1) % 10}${code.slice(1)}`;
     await c.ui([

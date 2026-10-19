@@ -134,6 +134,11 @@ export async function startStack() {
       "linux",
     );
     mkdirSync(project);
+    mkdirSync(path.join(project, "templates"));
+    writeFileSync(
+      path.join(project, "templates", "magic-link.html"),
+      '<h2>Isolated phone sign-in</h2><p>TEST_CODE:{{ .Token }}</p><a href="{{ .ConfirmationURL }}">Sign in</a>',
+    );
     for (const name of ["migrations", "functions/account-data"])
       cpSync(path.join(workspace, "supabase", name), path.join(project, name), {
         recursive: true,
@@ -186,6 +191,9 @@ sign_in_sign_ups = 10000
 enable_signup = true
 enable_confirmations = true
 max_frequency = "1s"
+[auth.email.template.magic_link]
+subject = "Isolated phone sign-in"
+content_path = "./supabase/templates/magic-link.html"
 [edge_runtime]
 enabled = true
 policy = "per_worker"
