@@ -25,6 +25,9 @@ export const Field = forwardRef<TextInput, FieldProps>(function Field(
       </AppText>
       <TextInput
         {...props}
+        testID={
+          props.testID ?? `field-${label.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`
+        }
         ref={ref}
         allowFontScaling={allowFontScaling}
         accessibilityLabel={props.accessibilityLabel ?? label}

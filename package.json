@@ -42,7 +42,8 @@
     "test:flows:services": "node scripts/service-integration/run.mjs",
     "test:flows:passwords": "node scripts/service-integration/passwords.mjs",
     "test:flows:storage": "node scripts/service-integration/docker-storage.mjs",
-    "test:flows:phone:check": "node scripts/service-integration/phone-preflight.mjs"
+    "test:flows:phone:check": "node scripts/service-integration/phone-preflight.mjs",
+    "test:flows:phone": "node scripts/phone-integration/run.mjs"
   },
   "devDependencies": {
     "playwright": "1.62.1",
