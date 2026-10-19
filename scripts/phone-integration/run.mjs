@@ -235,6 +235,9 @@ try {
   assert.match(adb("shell", "pm", "path", appId), /^package:/);
   // No build artifacts or raw Maestro logs with test credentials are uploaded.
   const maestro = process.env.MAESTRO_BIN ?? "maestro";
+  // The cold native build can stall the emulator's launcher. Stop that system
+  // process before UI checks; never suppress an ANR from the application itself.
+  adb("shell", "am", "force-stop", "com.google.android.apps.nexuslauncher");
   const secrets = new Set();
   const redact = (value) => {
     let text = value;
@@ -247,6 +250,19 @@ try {
   };
   let sequence = 0;
   async function ui(commands) {
+    commands = commands.flatMap((entry) =>
+      entry.launchApp
+        ? [
+            entry,
+            {
+              runFlow: {
+                when: { visible: "Pixel Launcher isn't responding" },
+                commands: [{ tapOn: "Close app" }],
+              },
+            },
+          ]
+        : [entry],
+    );
     // Passwords go through Android's input service without entering a Maestro
     // file or driver log. The app still receives normal native keyboard input.
     if (commands.some((entry) => entry.inputSecret !== undefined)) {
@@ -312,6 +328,15 @@ try {
           ),
         ),
       );
+      try {
+        adb("shell", "uiautomator", "dump", "/sdcard/tender-e2e.xml");
+        writeFileSync(
+          path.join(output, `${stage}-hierarchy.xml`),
+          redact(adb("shell", "cat", "/sdcard/tender-e2e.xml")),
+        );
+      } finally {
+        adb("shell", "rm", "-f", "/sdcard/tender-e2e.xml");
+      }
       throw error;
     }
   }
