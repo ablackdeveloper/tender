@@ -157,10 +157,9 @@ export async function runFlows({ scenario }) {
       visible("Today"),
       ...privacy,
     ]);
-    assert.ok(
-      (await c.stack.admin.auth.admin.getUserById(c.user.id)).data.user
-        .last_sign_in_at,
-    );
+    const loginTime = (await c.stack.admin.auth.admin.getUserById(c.user.id))
+      .data.user.last_sign_in_at;
+    assert.ok(Date.parse(loginTime) > Date.parse(c.user.bootstrapSignedInAt));
   });
   await scenario("invalid-email-code", async (c) => {
     await c.ui([
@@ -198,6 +197,7 @@ export async function runFlows({ scenario }) {
     await c.ui([
       { stopApp: {} },
       { launchApp: { clearState: false } },
+      visible("Today"),
       ...privacy,
     ]);
     await accountExists(c);
@@ -211,6 +211,7 @@ export async function runFlows({ scenario }) {
       visible("Privacy and data"),
       { stopApp: {} },
       { launchApp: { clearState: false } },
+      visible("Today"),
       ...privacy,
     ]);
     await accountExists(c);

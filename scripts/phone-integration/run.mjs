@@ -335,14 +335,18 @@ try {
         },
       );
     } catch (error) {
-      writeFileSync(
-        path.join(output, `${stage}-maestro.log`),
-        redact(
-          readFileSync(
-            path.join(stack.root, `maestro-${sequence}.log`),
-            "utf8",
-          ),
-        ),
+      const diagnostic = redact(
+        readFileSync(path.join(stack.root, `maestro-${sequence}.log`), "utf8"),
+      );
+      writeFileSync(path.join(output, `${stage}-maestro.log`), diagnostic);
+      console.error(
+        diagnostic
+          .split(/\r?\n/)
+          .filter((line) =>
+            /FAILED|Assertion is false|Element not found/.test(line),
+          )
+          .slice(-4)
+          .join("\n"),
       );
       try {
         adb("shell", "uiautomator", "dump", "/sdcard/tender-e2e.xml");
@@ -402,26 +406,42 @@ try {
       secrets.add(password);
       users.push(user);
       if (complete) {
+        const bootstrap = stack.client();
+        const signedIn = await bootstrap.auth.signInWithPassword({
+          email,
+          password,
+        });
+        assert.ifError(signedIn.error);
+        user.bootstrapSignedInAt = signedIn.data.user.last_sign_in_at;
         assert.ifError(
           (
-            await stack.admin
-              .from("profiles")
-              .update({
-                onboarding_completed_at: new Date().toISOString(),
-                display_name: "Synthetic phone test",
-              })
-              .eq("id", user.id)
-          ).error,
-        );
-        assert.ifError(
-          (
-            await stack.admin.from("pregnancies").insert({
-              id: user.pregnancy,
-              owner_id: user.id,
-              timezone: "UTC",
-              due_date_source: "unknown",
+            await bootstrap.rpc("complete_onboarding", {
+              p_pregnancy_id: user.pregnancy,
+              p_lmp_date: null,
+              p_estimated_due_date: null,
+              p_due_date_source: null,
+              p_clinician_confirmed_at: null,
+              p_timezone: "UTC",
+              p_pregnancy_type: "unspecified",
+              p_display_name: "Synthetic phone test",
+              p_theme_preference: "system",
+              p_measurement_system: "metric",
+              p_editorial_updates_enabled: false,
+              p_appointment_reminders_enabled: false,
+              p_planning_reminders_enabled: false,
             })
           ).error,
+        );
+        const profile = await bootstrap
+          .from("profiles")
+          .select("id,onboarding_completed_at")
+          .eq("id", user.id)
+          .single();
+        assert.ifError(profile.error);
+        assert.equal(profile.data.id, user.id);
+        assert.ok(profile.data.onboarding_completed_at);
+        assert.ifError(
+          (await bootstrap.auth.signOut({ scope: "local" })).error,
         );
       }
       return user;
