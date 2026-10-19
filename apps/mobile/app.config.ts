@@ -109,7 +109,8 @@ export default ({ config }: ConfigContext): ExpoConfig => {
         {
           cameraPermission:
             "Allow Flutterings to use your camera only when you choose to add a journal or meal photo.",
-          microphonePermission: false,
+          microphonePermission:
+            "Allow Flutterings to use your microphone only while you record a journal voice note.",
           photosPermission:
             "Allow Flutterings to open your photo library only when you choose a journal or meal image.",
         },

@@ -257,6 +257,8 @@ try {
           "--device",
           serial,
           "test",
+          "--debug-output",
+          path.join(stack.root, `maestro-debug-${sequence}`),
           "--test-output-dir",
           path.join(stack.root, `maestro-${sequence}`),
           file,

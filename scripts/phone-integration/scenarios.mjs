@@ -166,13 +166,18 @@ export async function runFlows({ scenario }) {
       ...field("email-address", c.user.email),
       tap("Email me a sign-in link or code"),
       visible("Check your email"),
+    ]);
+    const code = (await readMail(c)).match(/\b\d{6,8}\b/)?.[0];
+    assert.ok(code, "The requested email must contain a code");
+    const invalid = `${(Number(code[0]) + 1) % 10}${code.slice(1)}`;
+    await c.ui([
       {
         scrollUntilVisible: {
           element: { id: "field-one-time-code" },
           direction: "DOWN",
         },
       },
-      ...field("one-time-code", "000000"),
+      ...field("one-time-code", invalid),
       tap("Verify code"),
       visible("That code could not be verified.*"),
     ]);
