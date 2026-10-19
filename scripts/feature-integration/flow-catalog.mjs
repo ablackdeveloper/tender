@@ -60,24 +60,29 @@ export const otherRoutes = {
       "Native Expo redirect needs device acceptance; Memories screen tested in browser",
   },
   "index.tsx": {
-    status: "blocked",
-    evidence: "Native session and onboarding redirect need Auth runtime",
+    status: "separate-native-suite",
+    evidence:
+      "phone-integration: first-use-onboarding and native-session-persists-restart; read the separate native report for results",
   },
   "(auth)/sign-in.tsx": {
-    status: "blocked",
-    evidence: "Real Auth/email service integration covered; native sign-in screen still needs a device",
+    status: "separate-native-suite",
+    evidence:
+      "phone-integration: email-code-login, invalid-email-code, empty-email, and invalid-email; read the separate native report for results",
   },
   "auth/callback.tsx": {
-    status: "blocked",
-    evidence: "Production callback with real email/PKCE covered; native deep link still needs a device",
+    status: "separate-native-suite",
+    evidence:
+      "phone-integration: malformed-callback, first-use-onboarding, and password-replacement; read the separate native report for results",
   },
   "auth/recover.tsx": {
-    status: "blocked",
-    evidence: "Real recovery email/session covered; native recovery screen still needs a device",
+    status: "separate-native-suite",
+    evidence:
+      "phone-integration: recovery-navigation and recovery-email-request; read the separate native report for results",
   },
   "auth/update-password.tsx": {
-    status: "blocked",
-    evidence: "Recovery session covered; successful password change and native screen remain open",
+    status: "separate-native-suite",
+    evidence:
+      "phone-integration: password-route-requires-recovery, password-short-and-mismatch, and password-replacement; read the separate native report for results",
   },
   "partner-invitation.tsx": {
     status: "blocked",
@@ -90,8 +95,8 @@ export const otherRoutes = {
   },
 };
 export const deviceGaps = [
-  "Camera, microphone, documents, encrypted local files, and upload retry",
-  "Push delivery, permissions, app lock, privacy cover, and OS background behavior",
-  "Account export file, deletion with stored files, and native sign-out cleanup (local JSON/export and empty-storage deletion covered)",
-  "Native navigation, accessibility, calendar, and system share sheet",
+  "Android Auth, setup, sign-out, deletion, document picker/upload, export share sheet, and microphone denial are separate cases in scripts/phone-integration; this browser report does not certify them",
+  "Physical camera/microphone behavior, encrypted device files, interrupted upload retry, and iOS",
+  "Push delivery, enrolled biometrics, privacy cover, and OS background behavior",
+  "Remaining native routes, screen-reader and large-text acceptance, calendar, and external OAuth providers",
 ];
