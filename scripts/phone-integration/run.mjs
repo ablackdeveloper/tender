@@ -292,7 +292,23 @@ try {
     for (const entry of commands) {
       if (entry.launchApp) entry.launchApp.permissions ??= { all: "unset" };
       if (typeof entry.inputText === "string") secrets.add(entry.inputText);
-      if (entry.openLink?.link) secrets.add(entry.openLink.link);
+      if (entry.openLink?.link) {
+        secrets.add(entry.openLink.link);
+        const url = new URL(entry.openLink.link);
+        for (const params of [
+          url.searchParams,
+          new URLSearchParams(url.hash.slice(1)),
+        ])
+          for (const key of [
+            "access_token",
+            "refresh_token",
+            "token_hash",
+            "code",
+          ]) {
+            const value = params.get(key);
+            if (value) secrets.add(value);
+          }
+      }
     }
     const file = path.join(stack.root, `flow-${++sequence}.yaml`);
     writeFileSync(
@@ -481,11 +497,15 @@ try {
             }
           }
           const existing = await stack.admin.auth.admin.getUserById(user.id);
+          if (existing.error) assert.equal(existing.error.status, 404);
           if (existing.data.user)
             assert.ifError(
               (await stack.admin.auth.admin.deleteUser(user.id)).error,
             );
-          assert.ok((await stack.admin.auth.admin.getUserById(user.id)).error);
+          assert.equal(
+            (await stack.admin.auth.admin.getUserById(user.id)).error?.status,
+            404,
+          );
           const rows = await stack.admin
             .from("profiles")
             .select("id")

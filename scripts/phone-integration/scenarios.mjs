@@ -154,6 +154,7 @@ export async function runFlows({ scenario }) {
       },
       ...field("one-time-code", code),
       tap("Verify code"),
+      visible("Today"),
       ...privacy,
     ]);
     assert.ok(
@@ -275,6 +276,7 @@ export async function runFlows({ scenario }) {
       ...field("new-password", next),
       ...field("confirm-password", next),
       tap("Update password"),
+      visible("Today"),
       ...privacy,
     ]);
     assert.ifError(
@@ -310,7 +312,10 @@ export async function runFlows({ scenario }) {
       { launchApp: { clearState: false } },
       visible("Welcome to Flutterings"),
     ]);
-    assert.ok((await c.stack.admin.auth.admin.getUserById(c.user.id)).error);
+    assert.equal(
+      (await c.stack.admin.auth.admin.getUserById(c.user.id)).error?.status,
+      404,
+    );
     assert.equal(
       (await c.stack.admin.auth.admin.getUserById(other.id)).data.user?.id,
       other.id,
