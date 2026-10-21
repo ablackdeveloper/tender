@@ -149,7 +149,11 @@ export function createIosDevice({ runId, appId }) {
           `id=${serial}`,
           "-derivedDataPath",
           derived,
-          "CODE_SIGNING_ALLOWED=NO",
+          // Simulator ad-hoc signing needs no Apple account. Disabling signing
+          // removes the base entitlements that SecureStore needs for Keychain.
+          "CODE_SIGNING_ALLOWED=YES",
+          "CODE_SIGN_IDENTITY=-",
+          "CODE_SIGN_INJECT_BASE_ENTITLEMENTS=YES",
           "ONLY_ACTIVE_ARCH=YES",
           "build",
         ],
@@ -180,6 +184,11 @@ export function createIosDevice({ runId, appId }) {
       );
       assert.equal(plist.CFBundleIdentifier, appId);
       appExecutable = plist.CFBundleExecutable;
+      await execute("codesign", ["--verify", "--strict", appBundle], {
+        log: path.join(output, "simulator-signing.log"),
+        timeout: 30000,
+      });
+      report.simulatorSigning = "ad-hoc; signature verified";
       report.appExecutableSha256 = createHash("sha256")
         .update(readFileSync(path.join(appBundle, plist.CFBundleExecutable)))
         .digest("hex");

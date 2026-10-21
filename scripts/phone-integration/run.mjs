@@ -866,33 +866,37 @@ try {
   }
 } finally {
   const cleanupErrors = [];
-  const cleanup = async (action) => {
+  const cleanup = async (phase, action) => {
     try {
       await action();
-    } catch {
-      cleanupErrors.push(true);
+    } catch (error) {
+      cleanupErrors.push({ phase, error: redact(error.message) });
+      console.error(`Native cleanup failed: ${phase}`);
     }
   };
-  if (iosDevice) await cleanup(() => iosDevice.close());
+  if (iosDevice) await cleanup("owned iOS simulator", () => iosDevice.close());
   else {
     if (installed)
-      await cleanup(() => {
+      await cleanup("isolated Android app", () => {
         adb("shell", "pm", "clear", appId);
         adb("uninstall", appId);
         assert.equal(adb("shell", "pm", "list", "packages", appId).trim(), "");
       });
     if (reversePort)
-      await cleanup(() => adb("reverse", "--remove", `tcp:${reversePort}`));
+      await cleanup("Android port forwarding", () =>
+        adb("reverse", "--remove", `tcp:${reversePort}`),
+      );
   }
   if (server)
-    await cleanup(async () => {
+    await cleanup("local HTTPS proxy", async () => {
       server.closeAllConnections();
       await new Promise((r) => server.close(r));
     });
-  if (stack) await cleanup(() => stack.close());
+  if (stack) await cleanup("owned local backend", () => stack.close());
   report.cleanup = !report.setupCleanupFailed && cleanupErrors.length === 0;
   if (!report.cleanup) {
     report.cleanupError = "Owned test resources could not all be removed";
+    report.cleanupFailures = cleanupErrors;
   }
   report.status =
     !report.error &&

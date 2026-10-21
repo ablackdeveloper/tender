@@ -74,7 +74,7 @@ Still separate from emulator evidence: physical camera/microphone quality, inter
 
 ## iOS simulator and physical phones
 
-`pnpm test:flows:ios` uses the same 19 integration/E2E cases on macOS. The `iOS phone E2E` workflow uses a standard Intel macOS 26 runner, Xcode 26.6, Maestro 2.11.0, and an owned Colima Linux VM for local Supabase. No hosted backend, Apple account, signing certificate, or unit test is used. The simulator build includes the production app UI and services.
+`pnpm test:flows:ios` uses the same 19 integration/E2E cases on macOS. The `iOS phone E2E` workflow uses a standard Intel macOS 26 runner, Xcode 26.6, Maestro 2.11.0, and an owned Colima Linux VM for local Supabase. No hosted backend, Apple account, signing certificate, or unit test is used. Xcode signs the simulator app with its local ad-hoc identity (`-`) so the app receives the base Keychain entitlements; the harness verifies the signature before installation. Disabling signing caused a real SecureStore entitlement failure during startup. The simulator build includes the production app UI and services. Failed cleanup reports name the failed resource phase and retain its redacted error.
 
 The workflow initializes Xcode before starting Docker and boots the simulator after compilation. On macOS, the CLI's short service-health deadline is replaced by a five-minute harness gate: every owned container must be healthy, and real Auth, database, and Storage API reads must succeed. The backend must contain no accounts or profiles, and both storage buckets must be private. No test starts before these checks pass. Cleanup deletes the owned Colima data disk as well as the VM and checks that both are gone. Pre-existing VM paths are refused and never claimed for cleanup.
 
