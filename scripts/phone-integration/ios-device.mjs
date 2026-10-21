@@ -13,6 +13,8 @@ import { command } from "./stack.mjs";
 // This adapter owns a simulator it creates itself. It never accepts a device UDID.
 export function createIosDevice({ runId, appId }) {
   let serial, appBundle, certificate, helperBundle;
+  let creationAttempted = false;
+  const simulatorName = `Tender E2E ${runId}`;
   const helperId = "com.tender.fixtures.e2e";
   const sim = (...args) =>
     command("xcrun", ["simctl", ...args], { timeout: 120000 });
@@ -55,13 +57,25 @@ export function createIosDevice({ runId, appId }) {
         );
       assert.ok(runtimes.length, "No available iOS Simulator runtime");
       report.iosVersion = runtimes[0].version;
-      serial = sim(
-        "create",
-        `Tender E2E ${runId}`,
-        "com.apple.CoreSimulator.SimDeviceType.iPhone-16",
-        runtimes[0].identifier,
-      ).trim();
-      assert.match(serial, /^[0-9A-F-]{36}$/i);
+      creationAttempted = true;
+      let created;
+      try {
+        created = command(
+          "xcrun",
+          [
+            "simctl",
+            "create",
+            simulatorName,
+            "com.apple.CoreSimulator.SimDeviceType.iPhone-16",
+            runtimes[0].identifier,
+          ],
+          { timeout: 300000 },
+        ).trim();
+      } catch (error) {
+        throw new Error(`iOS simulator creation: ${error.message}`);
+      }
+      assert.match(created, /^[0-9A-F-]{36}$/i);
+      serial = created;
     },
     boot(report) {
       // A new runtime on a cold CI Mac must initialize its data before the
@@ -259,11 +273,22 @@ export function createIosDevice({ runId, appId }) {
       sim("io", serial, "screenshot", file);
     },
     close() {
-      if (!serial) return;
+      if (!serial && !creationAttempted) return;
       const records = () =>
         Object.values(
           JSON.parse(sim("list", "devices", "--json")).devices,
         ).flat();
+      if (!serial) {
+        const owned = records().filter(
+          (device) => device.name === simulatorName,
+        );
+        assert.equal(
+          owned.length,
+          1,
+          "Simulator creation returned no ID; cleanup cannot be confirmed",
+        );
+        serial = owned[0].udid;
+      }
       if (records().find((d) => d.udid === serial)?.state === "Booted")
         sim("shutdown", serial);
       sim("delete", serial);
