@@ -34,7 +34,7 @@ export function command(file, args, options = {}) {
       .replace(/sb_(?:secret|publishable)_[A-Za-z0-9_-]+/g, "[KEY]")
       .replace(/postgres(?:ql)?:\/\/[^\s]+/g, "[DATABASE URL]");
     throw new Error(
-      `${path.basename(file)} failed (${r.status ?? r.error?.code}): ${diagnostic}`,
+      `${path.basename(file)} failed (${r.error?.code ?? r.status}): ${diagnostic}`,
     );
   }
   return r.stdout;
@@ -68,7 +68,13 @@ export async function startStack() {
     "bin/supabase",
   );
   const supabase = (...args) =>
-    command(cli, ["--workdir", root, ...args], { env, timeout: 600000 });
+    command(cli, ["--workdir", root, ...args], {
+      env,
+      // The first macOS VM must pull and unpack the real service images.
+      // Keep other commands bounded separately from this cold start.
+      timeout:
+        process.platform === "darwin" && args[0] === "start" ? 1200000 : 600000,
+    });
   let started = false,
     network = false,
     edge;
