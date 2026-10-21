@@ -683,6 +683,7 @@ try {
     };
     try {
       clear();
+      await stack.assertMailEmpty();
       focusedPasswordField = undefined;
       if (!iosDevice) adb("logcat", "-c", "-b", "crash");
       const user = await fresh();
@@ -777,6 +778,8 @@ try {
           assert.ifError(rows.error);
           assert.equal(rows.data.length, 0);
         }
+        await stack.flushMail();
+        result.mailCleanup = true;
         result.cleanup = true;
       } catch {
         result.status = "failed";

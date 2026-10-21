@@ -345,6 +345,32 @@ verify_jwt = true
       if (ready?.status === 204) break;
       await new Promise((r) => setTimeout(r, 500));
     }
+    // This inbox is part of this run's owned backend, never a supplied endpoint.
+    const mailUrl = `http://127.0.0.1:${mail}`;
+    const mailRequest = async (options = {}) => {
+      const response = await fetch(`${mailUrl}/api/v1/messages`, {
+        ...options,
+        redirect: "error",
+        signal: AbortSignal.timeout(10000),
+      });
+      assert.equal(response.status, 200, "Owned test inbox API failed");
+      return response;
+    };
+    const assertMailEmpty = async () => {
+      const inbox = await (await mailRequest()).json();
+      assert.equal(inbox.total, 0, "Test emails survived case cleanup");
+      assert.deepEqual(inbox.messages, []);
+    };
+    const flushMail = async () => {
+      // Mailpit deletes all messages when IDs is empty. The server is run-owned.
+      await mailRequest({
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ IDs: [] }),
+      });
+      await assertMailEmpty();
+    };
+    await assertMailEmpty();
     return {
       id,
       root,
@@ -352,7 +378,9 @@ verify_jwt = true
       anonKey: status.ANON_KEY,
       admin,
       client,
-      mailUrl: `http://127.0.0.1:${mail}`,
+      mailUrl,
+      assertMailEmpty,
+      flushMail,
       close,
     };
   } catch (error) {
