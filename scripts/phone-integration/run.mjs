@@ -56,6 +56,7 @@ save();
 let stack,
   server,
   serial,
+  androidLaunchActivity,
   reversePort,
   installed = false;
 let stage = "preflight";
@@ -340,6 +341,27 @@ try {
     adb("install", "-r", apk);
     installed = true;
     assert.match(adb("shell", "pm", "path", appId), /^package:/);
+    androidLaunchActivity = adb(
+      "shell",
+      "cmd",
+      "package",
+      "resolve-activity",
+      "--brief",
+      "--user",
+      "current",
+      "-a",
+      "android.intent.action.MAIN",
+      "-c",
+      "android.intent.category.LAUNCHER",
+      "-p",
+      appId,
+    ).trim();
+    assert.match(
+      androidLaunchActivity,
+      /^com\.tender\.companion\.e2e\/[.A-Za-z0-9_$]+$/,
+      "Resolve exactly one launch activity from the installed test app",
+    );
+    report.androidLaunchActivity = androidLaunchActivity;
   }
   // No build artifacts or raw Maestro logs with test credentials are uploaded.
   const maestro = process.env.MAESTRO_BIN ?? "maestro";
@@ -382,8 +404,8 @@ try {
             "android.intent.action.MAIN",
             "-c",
             "android.intent.category.LAUNCHER",
-            "-p",
-            appId,
+            "-n",
+            androidLaunchActivity,
           ],
           { log: launchLog, timeout: 30000 },
         );
