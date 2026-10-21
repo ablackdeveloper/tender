@@ -17,7 +17,7 @@ const command = (file, args, options = {}) =>
 
 // This adapter owns a simulator it creates itself. It never accepts a device UDID.
 export function createIosDevice({ runId, appId }) {
-  let serial, appBundle, certificate, helperBundle;
+  let serial, appBundle, certificate, helperBundle, appExecutable;
   let creationAttempted = false;
   const simulatorName = `Tender E2E ${runId}`;
   const helperId = "com.tender.fixtures.e2e";
@@ -179,6 +179,7 @@ export function createIosDevice({ runId, appId }) {
         ]),
       );
       assert.equal(plist.CFBundleIdentifier, appId);
+      appExecutable = plist.CFBundleExecutable;
       report.appExecutableSha256 = createHash("sha256")
         .update(readFileSync(path.join(appBundle, plist.CFBundleExecutable)))
         .digest("hex");
@@ -284,6 +285,27 @@ export function createIosDevice({ runId, appId }) {
     },
     screenshot(file) {
       sim("io", serial, "screenshot", file);
+    },
+    diagnostics() {
+      assert.ok(appExecutable, "App executable is not known");
+      return command(
+        "xcrun",
+        [
+          "simctl",
+          "spawn",
+          serial,
+          "log",
+          "show",
+          "--last",
+          "5m",
+          "--style",
+          "compact",
+          "--info",
+          "--predicate",
+          `process == ${JSON.stringify(appExecutable)}`,
+        ],
+        { timeout: 20000 },
+      );
     },
     close() {
       if (!serial && !creationAttempted) return;

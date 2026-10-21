@@ -85,6 +85,16 @@ function saveAndroidCrash() {
     console.error(`Native ${stage}: crash diagnostics were unavailable`);
   }
 }
+function saveIosDiagnostics() {
+  try {
+    writeFileSync(
+      path.join(output, `${stage}-ios-app.log`),
+      redact(iosDevice.diagnostics()).slice(-131072),
+    );
+  } catch {
+    console.error(`Native ${stage}: iOS app diagnostics were unavailable`);
+  }
+}
 async function execute(
   file,
   args,
@@ -508,9 +518,13 @@ try {
         ],
         {
           log: path.join(stack.root, `maestro-${sequence}.log`),
-          // iOS needs time for the JVM plus the XCTest driver's startup window.
-          // UI assertions retain their own shorter deadlines.
-          timeout: iosDevice ? 300000 : 120000,
+          // A cold CI run needed almost five minutes before its first assertion.
+          // Keep that startup budget separate; UI assertion deadlines stay fixed.
+          timeout: iosDevice
+            ? stage === "native-startup"
+              ? 480000
+              : 300000
+            : 120000,
         },
       );
       console.log(`Native ${stage} step ${sequence}: complete`);
@@ -705,7 +719,8 @@ try {
     } catch (error) {
       result.failure = redact(error.message);
       console.error(`Native ${name}: ${result.failure}`);
-      if (!iosDevice) saveAndroidCrash();
+      if (iosDevice) saveIosDiagnostics();
+      else saveAndroidCrash();
       // Preserve only the last screenshot. Secrets are never included in logs or reports.
       if (!name.includes("code")) {
         try {
@@ -836,7 +851,8 @@ try {
   report.error = `${stage}: ${error.message}`;
   console.error(report.error);
   if (installed && stage === "native-startup") {
-    if (!iosDevice) saveAndroidCrash();
+    if (iosDevice) saveIosDiagnostics();
+    else saveAndroidCrash();
     try {
       if (iosDevice)
         iosDevice.screenshot(path.join(output, "native-startup.png"));
