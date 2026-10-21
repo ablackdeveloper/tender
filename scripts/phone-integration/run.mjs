@@ -7,6 +7,7 @@ import {
   readFileSync,
   existsSync,
   cpSync,
+  readdirSync,
 } from "node:fs";
 import path from "node:path";
 import https from "node:https";
@@ -58,6 +59,17 @@ let stack,
   reversePort,
   installed = false;
 let stage = "preflight";
+const secrets = new Set();
+const redact = (value) => {
+  let text = value;
+  for (const secret of [...secrets]
+    .filter(Boolean)
+    .sort((a, b) => b.length - a.length))
+    text = text.split(secret).join("[REDACTED]");
+  return text
+    .replace(/eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g, "[JWT]")
+    .replace(/sb_(?:secret|publishable)_[A-Za-z0-9_-]+/g, "[KEY]");
+};
 const adb = (...args) =>
   command("adb", ["-s", serial, ...args], {
     timeout: args[0] === "install" ? 120000 : 20000,
@@ -106,7 +118,7 @@ async function execute(
     ]);
   } finally {
     clearTimeout(timer);
-    if (log) writeFileSync(log, Buffer.concat(chunks));
+    if (log) writeFileSync(log, redact(Buffer.concat(chunks).toString()));
   }
   assert.equal(
     code,
@@ -325,16 +337,6 @@ try {
   // process before UI checks; never suppress an ANR from the application itself.
   if (!iosDevice)
     adb("shell", "am", "force-stop", "com.google.android.apps.nexuslauncher");
-  const secrets = new Set();
-  const redact = (value) => {
-    let text = value;
-    for (const secret of [...secrets].sort((a, b) => b.length - a.length))
-      text = text.split(secret).join("[REDACTED]");
-    return text.replace(
-      /eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g,
-      "[JWT]",
-    );
-  };
   let sequence = 0;
   let focusedPasswordField;
   async function ui(commands) {
@@ -444,6 +446,35 @@ try {
         readFileSync(path.join(stack.root, `maestro-${sequence}.log`), "utf8"),
       );
       writeFileSync(path.join(output, `${stage}-maestro.log`), diagnostic);
+      // Driver logs distinguish a failed assertion from a stalled app launch.
+      // Copy text only, redact before truncating, and keep raw debug data private.
+      const debug = path.join(stack.root, `maestro-debug-${sequence}`);
+      try {
+        if (existsSync(debug)) {
+          const logs = readdirSync(debug, { recursive: true }).filter(
+            (name) => path.basename(name) === "maestro.log",
+          );
+          for (const [index, name] of logs.entries())
+            writeFileSync(
+              path.join(output, `${stage}-driver-${index}.log`),
+              redact(readFileSync(path.join(debug, name), "utf8")).slice(
+                -131072,
+              ),
+            );
+        }
+      } catch {
+        console.error(`Native ${stage}: driver diagnostics were unavailable`);
+      }
+      if (!iosDevice) {
+        try {
+          writeFileSync(
+            path.join(output, `${stage}-android-crash.log`),
+            redact(adb("logcat", "-d", "-b", "crash", "-v", "brief")),
+          );
+        } catch {
+          console.error(`Native ${stage}: crash diagnostics were unavailable`);
+        }
+      }
       console.error(
         diagnostic
           .split(/\r?\n/)

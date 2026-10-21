@@ -49,7 +49,7 @@ jobs:
         run: |
           test "$(uname -m)" = x86_64
           brew install colima docker
-          colima start --profile "$COLIMA_PROFILE" --cpu 2 --memory 6 --disk 40 --arch x86_64 --vm-type vz --mount-type virtiofs
+          colima start --profile "$COLIMA_PROFILE" --cpu 4 --memory 4 --disk 40 --arch x86_64 --vm-type vz --mount-type virtiofs
           echo "DOCKER_HOST=unix://$HOME/.colima/$COLIMA_PROFILE/docker.sock" >> "$GITHUB_ENV"
       - name: Build isolated iOS app and run native flows
         run: |

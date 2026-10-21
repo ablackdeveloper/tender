@@ -54,6 +54,8 @@ export function createIosDevice({ runId, appId }) {
       ).trim();
       assert.match(serial, /^[0-9A-F-]{36}$/i);
       report.iosVersion = runtimes[0].version;
+    },
+    boot(report) {
       // A new runtime on a cold CI Mac must initialize its data before the
       // simulator can accept UI commands. Record the phase without device data.
       for (const [phase, args, timeout] of [
@@ -195,6 +197,9 @@ export function createIosDevice({ runId, appId }) {
         ],
         { log: path.join(output, "fixture-build.log") },
       );
+      // Image extraction and native compilation do not require a running UI.
+      // Boot only after these jobs finish, leaving memory for the local backend.
+      this.boot(report);
       this.clear();
     },
     clear() {
