@@ -21,8 +21,15 @@ export function createIosDevice({ runId, appId }) {
   let creationAttempted = false;
   const simulatorName = `Tender E2E ${runId}`;
   const helperId = "com.tender.fixtures.e2e";
-  const sim = (...args) =>
-    command("xcrun", ["simctl", ...args], { timeout: 120000 });
+  const sim = (...args) => {
+    try {
+      return command("xcrun", ["simctl", ...args], { timeout: 120000 });
+    } catch (error) {
+      // Add only the fixed command verb, never its arguments or input.
+      const action = args[0] === "keychain" ? ` ${args[2]}` : "";
+      throw new Error(`simctl ${args[0]}${action}: ${error.message}`);
+    }
+  };
   const installedApps = () =>
     JSON.parse(
       command("plutil", ["-convert", "json", "-o", "-", "-"], {
@@ -55,12 +62,26 @@ export function createIosDevice({ runId, appId }) {
       } catch (error) {
         throw new Error(`iOS runtime inventory: ${error.message}`);
       }
+      const requestedRuntime = process.env.TENDER_IOS_VERSION;
+      if (requestedRuntime)
+        assert.match(requestedRuntime, /^\d+\.\d+(?:\.\d+)?$/);
       const runtimes = JSON.parse(inventory)
-        .runtimes.filter((r) => r.isAvailable && r.identifier.includes(".iOS-"))
+        .runtimes.filter(
+          (r) =>
+            r.isAvailable &&
+            r.identifier.includes(".iOS-") &&
+            (!requestedRuntime ||
+              r.version === requestedRuntime ||
+              r.version.startsWith(`${requestedRuntime}.`)),
+        )
         .sort((a, b) =>
           b.version.localeCompare(a.version, undefined, { numeric: true }),
         );
-      assert.ok(runtimes.length, "No available iOS Simulator runtime");
+      assert.ok(
+        runtimes.length,
+        "Requested iOS Simulator runtime is unavailable",
+      );
+      report.requestedIosVersion = requestedRuntime ?? "latest available";
       report.iosVersion = runtimes[0].version;
       creationAttempted = true;
       let created;
@@ -256,19 +277,23 @@ export function createIosDevice({ runId, appId }) {
       this.clear();
     },
     clear() {
+      console.log("iOS app reset: remove isolated apps");
       for (const id of [appId, helperId]) {
         if (installedApps()[id]) sim("uninstall", serial, id);
         assert.ok(!installedApps()[id], "Test app was not removed");
       }
       // Reinstallation alone does not clear iOS Keychain credentials.
+      console.log(
+        "iOS app reset: reset Keychain and restore local certificate",
+      );
       sim("keychain", serial, "reset");
       sim("keychain", serial, "add-root-cert", certificate);
-      command("xcrun", ["simctl", "pbcopy", serial], {
-        input: "",
-        timeout: 15000,
-      });
+      console.log("iOS app reset: clear simulator clipboard");
+      this.copySecret("");
+      console.log("iOS app reset: install isolated apps");
       for (const bundle of [appBundle, helperBundle])
         sim("install", serial, bundle);
+      console.log("iOS app reset: reset permissions and verify empty app data");
       sim("privacy", serial, "reset", "all", appId);
       assert.ok(installedApps()[appId]);
       const container = sim("get_app_container", serial, appId, "data").trim();
@@ -295,10 +320,14 @@ export function createIosDevice({ runId, appId }) {
       return name;
     },
     copySecret(value) {
-      command("xcrun", ["simctl", "pbcopy", serial], {
-        input: value,
-        timeout: 15000,
-      });
+      try {
+        command("xcrun", ["simctl", "pbcopy", serial], {
+          input: value,
+          timeout: 15000,
+        });
+      } catch {
+        throw new Error("simctl pbcopy failed; clipboard contents omitted");
+      }
     },
     screenshot(file) {
       sim("io", serial, "screenshot", file);

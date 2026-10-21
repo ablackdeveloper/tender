@@ -121,7 +121,14 @@ export async function startStack() {
     let backendRemoved = !started;
     if (started) {
       await attempt("Backend containers and volumes", () => {
-        supabase("stop", "--project-id", id, "--no-backup");
+        let stopError;
+        try {
+          supabase("stop", "--project-id", id, "--no-backup");
+        } catch (error) {
+          stopError = error;
+        }
+        // A CLI error alone cannot establish whether resources remain. Always
+        // inspect actual owned containers and volumes before reporting cleanup.
         assert.equal(
           command("docker", [
             "ps",
@@ -132,6 +139,7 @@ export async function startStack() {
             "{{.Names}}",
           ]).trim(),
           "",
+          `Owned backend containers remain${stopError ? `; ${stopError.message}` : ""}`,
         );
         assert.equal(
           command("docker", [
@@ -143,7 +151,12 @@ export async function startStack() {
             "{{.Name}}",
           ]).trim(),
           "",
+          `Owned backend volumes remain${stopError ? `; ${stopError.message}` : ""}`,
         );
+        if (stopError)
+          console.log(
+            "Backend cleanup: stop command failed; verified no owned containers or volumes remain",
+          );
         backendRemoved = true;
       });
     }
