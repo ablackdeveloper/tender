@@ -93,7 +93,7 @@ export function createIosDevice({ runId, appId }) {
         const started = Date.now();
         try {
           // The asynchronous runner kills the owned process group and closes
-          // its pipes on timeout. Keep the boot output for real-device diagnostics.
+          // its pipes on timeout. Keep the boot output for simulator diagnostics.
           await execute("xcrun", ["simctl", ...args], {
             timeout,
             log: path.join(

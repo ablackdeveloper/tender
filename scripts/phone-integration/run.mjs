@@ -508,7 +508,9 @@ try {
         ],
         {
           log: path.join(stack.root, `maestro-${sequence}.log`),
-          timeout: 120000,
+          // iOS needs time for the JVM plus the XCTest driver's startup window.
+          // UI assertions retain their own shorter deadlines.
+          timeout: iosDevice ? 300000 : 120000,
         },
       );
       console.log(`Native ${stage} step ${sequence}: complete`);
@@ -523,7 +525,9 @@ try {
       try {
         if (existsSync(debug)) {
           const logs = readdirSync(debug, { recursive: true }).filter(
-            (name) => path.basename(name) === "maestro.log",
+            (name) =>
+              path.basename(name) === "maestro.log" ||
+              /^xctest_runner_[\d_-]+\.log$/.test(path.basename(name)),
           );
           for (const [index, name] of logs.entries())
             writeFileSync(

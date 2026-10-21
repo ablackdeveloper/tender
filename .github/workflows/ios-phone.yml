@@ -18,6 +18,7 @@ jobs:
       TENDER_NATIVE_E2E: "1"
       TENDER_TEST_PASSWORD_SOURCE: disposable-generated
       MAESTRO_CLI_NO_ANALYTICS: "1"
+      MAESTRO_DRIVER_STARTUP_TIMEOUT: "180000"
       HOMEBREW_NO_AUTO_UPDATE: "1"
       COLIMA_PROFILE: tender-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
