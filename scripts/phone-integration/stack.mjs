@@ -80,61 +80,99 @@ export async function startStack() {
     edge;
   const clients = [];
   async function close() {
-    for (const c of clients) c.auth.stopAutoRefresh();
-    if (edge && edge.exitCode === null) {
-      edge.kill();
-      await Promise.race([
-        once(edge, "close"),
-        new Promise((_, reject) =>
-          setTimeout(
-            () => reject(new Error("Edge stop timed out")),
-            10000,
-          ).unref(),
-        ),
-      ]);
-    }
+    const errors = [];
+    const attempt = async (phase, action) => {
+      try {
+        await action();
+      } catch (error) {
+        errors.push(`${phase}: ${error.message}`);
+      }
+    };
+    const edgeRunning = () =>
+      edge?.pid && edge.exitCode === null && edge.signalCode === null;
+    await attempt("Auth clients", async () => {
+      await Promise.all(clients.map((c) => c.auth.stopAutoRefresh()));
+    });
+    await attempt("Edge process", async () => {
+      if (!edgeRunning()) return;
+      const exited = once(edge, "exit");
+      const waitForExit = async () => {
+        let timer;
+        try {
+          return await Promise.race([
+            exited.then(() => true),
+            new Promise((resolve) => {
+              timer = setTimeout(() => resolve(false), 10000);
+            }),
+          ]);
+        } finally {
+          clearTimeout(timer);
+        }
+      };
+      edge.kill("SIGTERM");
+      if (!(await waitForExit())) {
+        // This is the exact CLI child created by this run, never a global PID
+        // search. Forced termination is limited to the owned child process.
+        edge.kill("SIGKILL");
+        assert.ok(await waitForExit(), "Edge stop timed out after SIGKILL");
+      }
+      assert.ok(!edgeRunning(), "Edge process survived cleanup");
+    });
+    let backendRemoved = !started;
     if (started) {
-      supabase("stop", "--project-id", id, "--no-backup");
-      assert.equal(
-        command("docker", [
-          "ps",
-          "-a",
-          "--filter",
-          `name=${id}`,
-          "--format",
-          "{{.Names}}",
-        ]).trim(),
-        "",
-      );
-      assert.equal(
-        command("docker", [
-          "volume",
-          "ls",
-          "--filter",
-          `name=${id}`,
-          "--format",
-          "{{.Name}}",
-        ]).trim(),
-        "",
-      );
+      await attempt("Backend containers and volumes", () => {
+        supabase("stop", "--project-id", id, "--no-backup");
+        assert.equal(
+          command("docker", [
+            "ps",
+            "-a",
+            "--filter",
+            `name=${id}`,
+            "--format",
+            "{{.Names}}",
+          ]).trim(),
+          "",
+        );
+        assert.equal(
+          command("docker", [
+            "volume",
+            "ls",
+            "--filter",
+            `name=${id}`,
+            "--format",
+            "{{.Name}}",
+          ]).trim(),
+          "",
+        );
+        backendRemoved = true;
+      });
     }
     if (network) {
-      assert.equal(
-        command("docker", [
-          "network",
-          "inspect",
+      await attempt("Owned Docker network", () => {
+        assert.equal(
+          command("docker", [
+            "network",
+            "inspect",
+            id,
+            "--format",
+            '{{index .Labels "com.tender.test.run"}}',
+          ]).trim(),
           id,
-          "--format",
-          '{{index .Labels "com.tender.test.run"}}',
-        ]).trim(),
-        id,
-      );
-      command("docker", ["network", "rm", id]);
+        );
+        command("docker", ["network", "rm", id]);
+      });
     }
-    assert.equal(path.dirname(root), path.resolve(tmpdir()));
-    assert.ok(path.basename(root).startsWith("tender-phone-"));
-    rmSync(root, { recursive: true, force: true });
-    assert.ok(!existsSync(root));
+    await attempt("Owned temporary directory", () => {
+      assert.ok(
+        backendRemoved && !edgeRunning(),
+        "Preserve files while owned services remain",
+      );
+      assert.equal(path.dirname(root), path.resolve(tmpdir()));
+      assert.ok(path.basename(root).startsWith("tender-phone-"));
+      rmSync(root, { recursive: true, force: true });
+      assert.ok(!existsSync(root));
+    });
+    assert.equal(errors.length, 0, errors.join("; "));
   }
   try {
     assert.equal(

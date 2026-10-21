@@ -82,14 +82,14 @@ export function createIosDevice({ runId, appId }) {
       assert.match(created, /^[0-9A-F-]{36}$/i);
       serial = created;
     },
-    async boot({ report, execute, output }) {
+    async boot({ report, execute, output, label = "simulator" }) {
       // A new runtime on a cold CI Mac must initialize its data before the
       // simulator can accept UI commands. Record the phase without device data.
       for (const [phase, args, timeout] of [
         ["boot", ["boot", serial], 300000],
         ["boot readiness", ["bootstatus", serial, "-b"], 600000],
       ]) {
-        console.log(`iOS simulator: ${phase}`);
+        console.log(`iOS ${label}: ${phase}`);
         const started = Date.now();
         try {
           // The asynchronous runner kills the owned process group and closes
@@ -98,18 +98,22 @@ export function createIosDevice({ runId, appId }) {
             timeout,
             log: path.join(
               output,
-              `simulator-${phase.replaceAll(" ", "-")}.log`,
+              `${label}-${phase.replaceAll(" ", "-")}.log`,
             ),
           });
         } catch (error) {
           throw new Error(`iOS simulator ${phase}: ${error.message}`);
         } finally {
           (report.simulatorSetup ??= []).push({
+            label,
             phase,
             elapsedMs: Date.now() - started,
           });
         }
       }
+    },
+    shutdown() {
+      sim("shutdown", serial);
     },
     async build({ app, env, root, cert, output, execute, report }) {
       const ios = path.join(app, "ios");
@@ -118,11 +122,13 @@ export function createIosDevice({ runId, appId }) {
         "Use a fresh checkout; existing iOS projects are preserved",
       );
       certificate = cert;
+      console.log("iOS build: generate native project");
       await execute(
         "pnpm",
         ["exec", "expo", "prebuild", "--platform", "ios", "--no-install"],
         { cwd: app, env, log: path.join(output, "prebuild.log") },
       );
+      console.log("iOS build: install native dependencies");
       await execute("pod", ["install"], {
         cwd: ios,
         env,
@@ -134,6 +140,7 @@ export function createIosDevice({ runId, appId }) {
       assert.equal(workspaces.length, 1);
       const scheme = workspaces[0].replace(/\.xcworkspace$/, "");
       const derived = path.join(root, "ios-build");
+      console.log("iOS build: compile and sign simulator app");
       await execute(
         "xcodebuild",
         [
@@ -184,6 +191,7 @@ export function createIosDevice({ runId, appId }) {
       );
       assert.equal(plist.CFBundleIdentifier, appId);
       appExecutable = plist.CFBundleExecutable;
+      console.log("iOS build: verify app signature");
       await execute("codesign", ["--verify", "--strict", appBundle], {
         log: path.join(output, "simulator-signing.log"),
         timeout: 30000,
@@ -227,6 +235,7 @@ export function createIosDevice({ runId, appId }) {
         "iphonesimulator",
         "--show-sdk-path",
       ]).trim();
+      console.log("iOS build: compile isolated file provider");
       await execute(
         "xcrun",
         [
@@ -242,8 +251,7 @@ export function createIosDevice({ runId, appId }) {
         ],
         { log: path.join(output, "fixture-build.log") },
       );
-      // Image extraction and native compilation do not require a running UI.
-      // Boot only after these jobs finish, leaving memory for the local backend.
+      // Resume the initialized simulator only after compilation finishes.
       await this.boot({ report, execute, output });
       this.clear();
     },
@@ -333,9 +341,23 @@ export function createIosDevice({ runId, appId }) {
         );
         serial = owned[0].udid;
       }
-      if (records().find((d) => d.udid === serial)?.state === "Booted")
-        sim("shutdown", serial);
-      sim("delete", serial);
+      let shutdownError;
+      if (records().find((d) => d.udid === serial)?.state === "Booted") {
+        try {
+          this.shutdown();
+        } catch (error) {
+          shutdownError = error;
+        }
+      }
+      // A stalled shutdown must not prevent deletion of this owned simulator.
+      // Only verified absence below establishes successful cleanup.
+      try {
+        sim("delete", serial);
+      } catch (error) {
+        throw new Error(
+          `Owned simulator deletion failed: ${error.message}${shutdownError ? `; shutdown: ${shutdownError.message}` : ""}`,
+        );
+      }
       assert.ok(
         !records().some((d) => d.udid === serial),
         "Owned simulator still exists",

@@ -163,6 +163,16 @@ try {
   if (iosDevice) {
     iosDevice.prepare(report);
     serial = iosDevice.serial;
+    // First boot performs OS data migration. Finish it before the local
+    // backend and native compilation compete for this runner's resources.
+    stage = "iOS runtime initialization";
+    await iosDevice.boot({
+      report,
+      execute,
+      output,
+      label: "simulator-initialization",
+    });
+    iosDevice.shutdown();
   } else {
     const devices = command("adb", ["devices"])
       .split(/\r?\n/)
