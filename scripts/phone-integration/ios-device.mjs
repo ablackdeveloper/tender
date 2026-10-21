@@ -40,12 +40,21 @@ export function createIosDevice({ runId, appId }) {
             (Number(version[1]) === 26 && Number(version[2]) >= 4)),
         "Expo SDK 57 requires Xcode 26.4 or later",
       );
-      const runtimes = JSON.parse(sim("list", "runtimes", "--json"))
+      let inventory;
+      try {
+        inventory = command("xcrun", ["simctl", "list", "runtimes", "--json"], {
+          timeout: 300000,
+        });
+      } catch (error) {
+        throw new Error(`iOS runtime inventory: ${error.message}`);
+      }
+      const runtimes = JSON.parse(inventory)
         .runtimes.filter((r) => r.isAvailable && r.identifier.includes(".iOS-"))
         .sort((a, b) =>
           b.version.localeCompare(a.version, undefined, { numeric: true }),
         );
       assert.ok(runtimes.length, "No available iOS Simulator runtime");
+      report.iosVersion = runtimes[0].version;
       serial = sim(
         "create",
         `Tender E2E ${runId}`,
@@ -53,7 +62,6 @@ export function createIosDevice({ runId, appId }) {
         runtimes[0].identifier,
       ).trim();
       assert.match(serial, /^[0-9A-F-]{36}$/i);
-      report.iosVersion = runtimes[0].version;
     },
     boot(report) {
       // A new runtime on a cold CI Mac must initialize its data before the

@@ -44,6 +44,9 @@ jobs:
           unzip -q "$RUNNER_TEMP/maestro.zip" -d "$RUNNER_TEMP"
           chmod +x "$RUNNER_TEMP/maestro/bin/maestro"
           echo "MAESTRO_BIN=$RUNNER_TEMP/maestro/bin/maestro" >> "$GITHUB_ENV"
+      - name: Initialize the Xcode simulator service
+        timeout-minutes: 5
+        run: xcrun simctl list runtimes --json > "$RUNNER_TEMP/ios-runtimes.json"
       - name: Start owned local Docker environment
         timeout-minutes: 20
         run: |
