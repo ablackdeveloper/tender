@@ -49,6 +49,9 @@ jobs:
         run: |
           test "$(uname -m)" = x86_64
           test ! -e "$HOME/.colima/$COLIMA_PROFILE"
+          test ! -e "$HOME/.colima/_lima/colima-$COLIMA_PROFILE"
+          test ! -e "$HOME/.colima/_lima/_disks/colima-$COLIMA_PROFILE"
+          echo "TENDER_COLIMA_OWNED=1" >> "$GITHUB_ENV"
           df -h "$RUNNER_TEMP"
           brew install colima docker
           colima start --profile "$COLIMA_PROFILE" --cpu 4 --memory 4 --disk 40 --arch x86_64 --vm-type vz --mount-type virtiofs
@@ -59,13 +62,13 @@ jobs:
           docker info --format 'Engine {{.ServerVersion}}; driver {{.Driver}}; CPUs {{.NCPU}}; memory {{.MemTotal}}'
           pnpm test:flows:phone
       - name: Stop owned Docker environment
-        if: always()
+        if: always() && env.TENDER_COLIMA_OWNED == '1'
         run: |
           if command -v colima >/dev/null && test -d "$HOME/.colima/$COLIMA_PROFILE"; then
             colima delete --profile "$COLIMA_PROFILE" --data --force
-            test ! -e "$HOME/.colima/_lima/_disks/colima-$COLIMA_PROFILE/datadisk"
-            test ! -d "$HOME/.colima/_lima/colima-$COLIMA_PROFILE"
           fi
+          test ! -e "$HOME/.colima/_lima/_disks/colima-$COLIMA_PROFILE/datadisk"
+          test ! -d "$HOME/.colima/_lima/colima-$COLIMA_PROFILE"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
