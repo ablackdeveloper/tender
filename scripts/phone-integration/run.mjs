@@ -346,7 +346,7 @@ try {
       "cmd",
       "package",
       "resolve-activity",
-      "--brief",
+      "--components",
       "--user",
       "current",
       "-a",
