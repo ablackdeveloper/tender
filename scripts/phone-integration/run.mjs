@@ -565,15 +565,10 @@ try {
       );
       try {
         if (iosDevice) {
-          const hierarchy = command(
-            maestro,
-            ["--device", serial, "hierarchy"],
-            { timeout: 15000 },
-          );
-          writeFileSync(
-            path.join(output, `${stage}-hierarchy.txt`),
-            redact(hierarchy),
-          );
+          // A new Maestro session can launch its own driver app and change the
+          // foreground screen. Capture the failed UI without starting a driver.
+          if (!stage.includes("code"))
+            iosDevice.screenshot(path.join(output, `${stage}.png`));
         } else {
           command(
             "adb",
