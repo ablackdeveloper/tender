@@ -366,19 +366,28 @@ try {
         if (entry.launchApp.clearState)
           assert.equal(adb("shell", "pm", "clear", appId).trim(), "Success");
         console.log(`Native ${stage}: Android activity launch`);
-        const launched = adb(
-          "shell",
-          "am",
-          "start",
-          "-W",
-          "-S",
-          "-a",
-          "android.intent.action.MAIN",
-          "-c",
-          "android.intent.category.LAUNCHER",
-          "-p",
-          appId,
+        const launchLog = path.join(output, `${stage}-android-launch.log`);
+        // Keep the HTTPS proxy responsive while Android waits for the first frame.
+        await execute(
+          "adb",
+          [
+            "-s",
+            serial,
+            "shell",
+            "am",
+            "start",
+            "-W",
+            "-S",
+            "-a",
+            "android.intent.action.MAIN",
+            "-c",
+            "android.intent.category.LAUNCHER",
+            "-p",
+            appId,
+          ],
+          { log: launchLog, timeout: 30000 },
         );
+        const launched = readFileSync(launchLog, "utf8");
         assert.match(launched, /^Status: ok\r?$/m);
         assert.match(launched, /^Activity: com\.tender\.companion\.e2e\//m);
         // pm clear resets permissions for each fresh case. Launching through
@@ -652,6 +661,7 @@ try {
     };
     try {
       clear();
+      focusedPasswordField = undefined;
       if (!iosDevice) adb("logcat", "-c", "-b", "crash");
       const user = await fresh();
       await ui([
