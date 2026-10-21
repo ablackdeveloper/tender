@@ -74,6 +74,16 @@ const adb = (...args) =>
   command("adb", ["-s", serial, ...args], {
     timeout: args[0] === "install" ? 120000 : 20000,
   });
+function saveAndroidCrash() {
+  try {
+    writeFileSync(
+      path.join(output, `${stage}-android-crash.log`),
+      redact(adb("logcat", "-d", "-b", "crash", "-v", "brief")),
+    );
+  } catch {
+    console.error(`Native ${stage}: crash diagnostics were unavailable`);
+  }
+}
 async function execute(
   file,
   args,
@@ -340,19 +350,49 @@ try {
   let sequence = 0;
   let focusedPasswordField;
   async function ui(commands) {
-    commands = commands.flatMap((entry) =>
-      entry.launchApp && !iosDevice
-        ? [
-            entry,
-            {
-              runFlow: {
-                when: { visible: "Pixel Launcher isn't responding" },
-                commands: [{ tapOn: "Close app" }],
-              },
-            },
-          ]
-        : [entry],
-    );
+    if (!iosDevice && commands.some((entry) => entry.launchApp)) {
+      let batch = [];
+      for (const entry of commands) {
+        if (!entry.launchApp) {
+          batch.push(entry);
+          continue;
+        }
+        if (batch.length) await ui(batch);
+        batch = [];
+        assert.ok(
+          Object.keys(entry.launchApp).every((key) => key === "clearState"),
+          "Android launch options must not silently grant permissions",
+        );
+        if (entry.launchApp.clearState)
+          assert.equal(adb("shell", "pm", "clear", appId).trim(), "Success");
+        console.log(`Native ${stage}: Android activity launch`);
+        const launched = adb(
+          "shell",
+          "am",
+          "start",
+          "-W",
+          "-S",
+          "-a",
+          "android.intent.action.MAIN",
+          "-c",
+          "android.intent.category.LAUNCHER",
+          "-p",
+          appId,
+        );
+        assert.match(launched, /^Status: ok\r?$/m);
+        assert.match(launched, /^Activity: com\.tender\.companion\.e2e\//m);
+        // pm clear resets permissions for each fresh case. Launching through
+        // Android leaves them unset and does not invoke driver permission grants.
+        batch.push({
+          runFlow: {
+            when: { visible: "Pixel Launcher isn't responding" },
+            commands: [{ tapOn: "Close app" }],
+          },
+        });
+      }
+      if (batch.length) await ui(batch);
+      return;
+    }
     // Passwords go through Android's input service without entering a Maestro
     // file or driver log. The app still receives normal native keyboard input.
     if (commands.some((entry) => entry.inputSecret !== undefined)) {
@@ -464,16 +504,6 @@ try {
         }
       } catch {
         console.error(`Native ${stage}: driver diagnostics were unavailable`);
-      }
-      if (!iosDevice) {
-        try {
-          writeFileSync(
-            path.join(output, `${stage}-android-crash.log`),
-            redact(adb("logcat", "-d", "-b", "crash", "-v", "brief")),
-          );
-        } catch {
-          console.error(`Native ${stage}: crash diagnostics were unavailable`);
-        }
       }
       console.error(
         diagnostic
@@ -637,6 +667,7 @@ try {
     } catch (error) {
       result.failure = redact(error.message);
       console.error(`Native ${name}: ${result.failure}`);
+      if (!iosDevice) saveAndroidCrash();
       // Preserve only the last screenshot. Secrets are never included in logs or reports.
       if (!name.includes("code")) {
         try {
@@ -765,6 +796,7 @@ try {
   report.error = `${stage}: ${error.message}`;
   console.error(report.error);
   if (installed && stage === "native-startup") {
+    if (!iosDevice) saveAndroidCrash();
     try {
       if (iosDevice)
         iosDevice.screenshot(path.join(output, "native-startup.png"));
