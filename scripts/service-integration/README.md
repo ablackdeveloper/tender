@@ -72,6 +72,18 @@ Reports are stored in `scripts/feature-integration/artifacts/native-phone-runs/<
 
 Still separate from emulator evidence: physical camera/microphone quality, interrupted media upload retry, inspection of encrypted device files, push delivery, enrolled biometrics, screen-reader and large-text acceptance, iOS, and external OAuth providers. Do not infer physical-device or store readiness from an emulator pass. No personal stored password or passkey is used.
 
+## iOS simulator and physical phones
+
+`pnpm test:flows:ios` uses the same 19 integration/E2E cases on macOS. The `iOS phone E2E` workflow uses a standard Intel macOS runner, Xcode 26.3, Maestro 2.11.0, and an owned Colima Linux VM for local Supabase. No hosted backend, Apple account, signing certificate, or unit test is used. The simulator build includes the production app UI and services.
+
+The adapter creates and later deletes its own simulator. Before each case it reinstalls the test app, resets the simulator keychain, restores the run-only localhost certificate, resets permissions, and verifies empty app documents/cache directories. A separate small fixture app supplies synthetic documents to the real Files picker. It does not enable file sharing in the production app. Disposable passwords enter through the simulator clipboard and the native Paste action; the clipboard is cleared immediately. Password values never enter Maestro flow files.
+
+Read the matching iOS CI report before claiming a pass. Syntax checks, an iOS build, or an Android pass do not prove iOS runtime behavior. A missing case or failed cleanup prevents success. The report includes the iOS runtime, Xcode version, app executable hash, individual case results, and cleanup result.
+
+On 20 October 2026, the user confirmed that no physical phone is available. `pnpm test:flows:phone:check` is a read-only readiness check with zero tests executed. The execution adapters still refuse physical devices. Physical Android work requires an authorized dedicated test phone and a device adapter that clears only the test package. Physical iPhone work requires a Mac, a signed isolated app, and a physical-device driver; the pinned Maestro release supports iOS simulators only. Do not point the existing staging IPA at these tests: its backend is not isolated.
+
+Physical camera/microphone quality, secure storage inspection, background recovery, push, biometrics, and accessibility acceptance remain blocked until a test phone is available. No phone installation or physical acceptance is claimed by simulator results.
+
 ## CI
 
 `.github/workflows/user-flows.yml` runs browser integration on Linux, native database/API/Auth/password integration on Windows, and Storage/account integration on Linux with Docker. Jobs upload available reports even on failure. No hosted account or project secret is required. See the run-specific evidence below; a local pass alone does not prove a GitHub run.

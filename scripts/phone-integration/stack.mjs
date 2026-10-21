@@ -61,7 +61,9 @@ export async function startStack() {
   );
   const cli = path.join(
     path.dirname(
-      cliRequire.resolve(`@supabase/cli-linux-${process.arch}/package.json`),
+      cliRequire.resolve(
+        `@supabase/cli-${process.platform}-${process.arch}/package.json`,
+      ),
     ),
     "bin/supabase",
   );

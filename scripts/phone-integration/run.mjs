@@ -15,9 +15,18 @@ import { once } from "node:events";
 import { startStack, command, workspace } from "./stack.mjs";
 import { reservePort } from "../run-native-postgres-integration.mjs";
 import { runFlows, scenarioCount } from "./scenarios.mjs";
+import { createIosDevice } from "./ios-device.mjs";
 
 const appId = "com.tender.companion.e2e";
 const runId = randomUUID();
+const platform = process.argv.includes("--ios")
+  ? "ios"
+  : (process.env.TENDER_NATIVE_PLATFORM ?? "android");
+assert.ok(
+  ["android", "ios"].includes(platform),
+  "Unsupported native test platform",
+);
+const iosDevice = platform === "ios" ? createIosDevice({ runId, appId }) : null;
 const output = path.join(
   workspace,
   "scripts/feature-integration/artifacts/native-phone-runs",
@@ -27,13 +36,13 @@ mkdirSync(output, { recursive: true });
 const report = {
   runId,
   status: "running",
-  kind: "android-native-e2e",
+  kind: `${platform}-native-e2e`,
   plannedScenarios: scenarioCount,
   results: [],
   cleanup: false,
   startedAt: new Date().toISOString(),
   limits: [
-    "Android emulator only; no physical device or iOS acceptance",
+    `${platform === "ios" ? "iOS simulator" : "Android emulator"} only; no physical device acceptance`,
     "No live OAuth, push delivery, or enrolled biometrics",
   ],
 };
@@ -109,8 +118,8 @@ try {
   assert.equal(process.versions.node.split(".")[0], "22");
   assert.equal(
     process.platform,
-    "linux",
-    "Use the Linux emulator CI job for now",
+    platform === "ios" ? "darwin" : "linux",
+    "Use the matching isolated native CI job",
   );
   assert.equal(process.env.TENDER_TEST_PASSWORD_SOURCE, "disposable-generated");
   assert.equal(
@@ -118,21 +127,26 @@ try {
     "1",
     "Explicit native test opt-in required",
   );
-  const devices = command("adb", ["devices"])
-    .split(/\r?\n/)
-    .filter((l) => /^emulator-\d+\s+device$/.test(l));
-  assert.equal(
-    devices.length,
-    1,
-    "Exactly one emulator is required; physical devices are never cleared",
-  );
-  serial = devices[0].split(/\s+/)[0];
-  assert.equal(adb("shell", "getprop", "ro.kernel.qemu").trim(), "1");
-  report.androidVersion = adb(
-    "shell",
-    "getprop",
-    "ro.build.version.release",
-  ).trim();
+  if (iosDevice) {
+    iosDevice.prepare(report);
+    serial = iosDevice.serial;
+  } else {
+    const devices = command("adb", ["devices"])
+      .split(/\r?\n/)
+      .filter((l) => /^emulator-\d+\s+device$/.test(l));
+    assert.equal(
+      devices.length,
+      1,
+      "Exactly one emulator is required; physical devices are never cleared",
+    );
+    serial = devices[0].split(/\s+/)[0];
+    assert.equal(adb("shell", "getprop", "ro.kernel.qemu").trim(), "1");
+    report.androidVersion = adb(
+      "shell",
+      "getprop",
+      "ro.build.version.release",
+    ).trim();
+  }
   const android = path.join(workspace, "apps/mobile/android");
   assert.ok(
     !existsSync(android),
@@ -217,7 +231,7 @@ try {
   );
   server.listen(reversePort, "127.0.0.1");
   await once(server, "listening");
-  adb("reverse", `tcp:${reversePort}`, `tcp:${reversePort}`);
+  if (!iosDevice) adb("reverse", `tcp:${reversePort}`, `tcp:${reversePort}`);
   const env = {
     ...process.env,
     CI: "1",
@@ -237,64 +251,80 @@ try {
   ])
     delete env[name];
   const app = path.join(workspace, "apps/mobile");
-  stage = "Android prebuild";
-  console.log(stage);
-  await execute(
-    "pnpm",
-    ["exec", "expo", "prebuild", "--platform", "android", "--no-install"],
-    { env, cwd: app, log: path.join(output, "prebuild.log") },
-  );
-  assert.match(
-    readFileSync(path.join(android, "app/build.gradle"), "utf8"),
-    /applicationId ['"]com\.tender\.companion\.e2e['"]/,
-  );
-  // Trust this run's certificate only in the generated E2E package. Never alter
-  // the application URL validator, global device trust, or source manifest.
-  const main = path.join(android, "app/src/main");
-  mkdirSync(path.join(main, "res/raw"), { recursive: true });
-  mkdirSync(path.join(main, "res/xml"), { recursive: true });
-  cpSync(cert, path.join(main, "res/raw/tender_test_ca.pem"));
-  writeFileSync(
-    path.join(main, "res/xml/tender_test_network.xml"),
-    '<network-security-config><base-config cleartextTrafficPermitted="false"><trust-anchors><certificates src="system"/></trust-anchors></base-config><domain-config cleartextTrafficPermitted="false"><domain includeSubdomains="false">localhost</domain><trust-anchors><certificates src="@raw/tender_test_ca"/></trust-anchors></domain-config></network-security-config>',
-  );
-  const manifest = path.join(main, "AndroidManifest.xml");
-  writeFileSync(
-    manifest,
-    readFileSync(manifest, "utf8").replace(
-      "<application ",
-      '<application android:networkSecurityConfig="@xml/tender_test_network" ',
-    ),
-  );
-  stage = "Android APK build";
-  console.log(stage);
-  await execute(
-    "bash",
-    [
-      "gradlew",
-      ":app:assembleRelease",
-      "-PreactNativeArchitectures=x86_64",
-      "--no-daemon",
-      "--max-workers=2",
-    ],
-    { env, cwd: android, log: path.join(output, "build.log") },
-  );
-  const apk = path.join(
-    android,
-    "app/build/outputs/apk/release/app-release.apk",
-  );
-  assert.ok(existsSync(apk));
-  report.apkSha256 = createHash("sha256")
-    .update(readFileSync(apk))
-    .digest("hex");
-  adb("install", "-r", apk);
-  installed = true;
-  assert.match(adb("shell", "pm", "path", appId), /^package:/);
+  if (iosDevice) {
+    stage = "iOS simulator build";
+    console.log(stage);
+    await iosDevice.build({
+      app,
+      env,
+      root: stack.root,
+      cert,
+      output,
+      execute,
+      report,
+    });
+    installed = true;
+  } else {
+    stage = "Android prebuild";
+    console.log(stage);
+    await execute(
+      "pnpm",
+      ["exec", "expo", "prebuild", "--platform", "android", "--no-install"],
+      { env, cwd: app, log: path.join(output, "prebuild.log") },
+    );
+    assert.match(
+      readFileSync(path.join(android, "app/build.gradle"), "utf8"),
+      /applicationId ['"]com\.tender\.companion\.e2e['"]/,
+    );
+    // Trust this run's certificate only in the generated E2E package. Never alter
+    // the application URL validator, global device trust, or source manifest.
+    const main = path.join(android, "app/src/main");
+    mkdirSync(path.join(main, "res/raw"), { recursive: true });
+    mkdirSync(path.join(main, "res/xml"), { recursive: true });
+    cpSync(cert, path.join(main, "res/raw/tender_test_ca.pem"));
+    writeFileSync(
+      path.join(main, "res/xml/tender_test_network.xml"),
+      '<network-security-config><base-config cleartextTrafficPermitted="false"><trust-anchors><certificates src="system"/></trust-anchors></base-config><domain-config cleartextTrafficPermitted="false"><domain includeSubdomains="false">localhost</domain><trust-anchors><certificates src="@raw/tender_test_ca"/></trust-anchors></domain-config></network-security-config>',
+    );
+    const manifest = path.join(main, "AndroidManifest.xml");
+    writeFileSync(
+      manifest,
+      readFileSync(manifest, "utf8").replace(
+        "<application ",
+        '<application android:networkSecurityConfig="@xml/tender_test_network" ',
+      ),
+    );
+    stage = "Android APK build";
+    console.log(stage);
+    await execute(
+      "bash",
+      [
+        "gradlew",
+        ":app:assembleRelease",
+        "-PreactNativeArchitectures=x86_64",
+        "--no-daemon",
+        "--max-workers=2",
+      ],
+      { env, cwd: android, log: path.join(output, "build.log") },
+    );
+    const apk = path.join(
+      android,
+      "app/build/outputs/apk/release/app-release.apk",
+    );
+    assert.ok(existsSync(apk));
+    report.apkSha256 = createHash("sha256")
+      .update(readFileSync(apk))
+      .digest("hex");
+    adb("install", "-r", apk);
+    installed = true;
+    assert.match(adb("shell", "pm", "path", appId), /^package:/);
+  }
   // No build artifacts or raw Maestro logs with test credentials are uploaded.
   const maestro = process.env.MAESTRO_BIN ?? "maestro";
   // The cold native build can stall the emulator's launcher. Stop that system
   // process before UI checks; never suppress an ANR from the application itself.
-  adb("shell", "am", "force-stop", "com.google.android.apps.nexuslauncher");
+  if (!iosDevice)
+    adb("shell", "am", "force-stop", "com.google.android.apps.nexuslauncher");
   const secrets = new Set();
   const redact = (value) => {
     let text = value;
@@ -306,9 +336,10 @@ try {
     );
   };
   let sequence = 0;
+  let focusedPasswordField;
   async function ui(commands) {
     commands = commands.flatMap((entry) =>
-      entry.launchApp
+      entry.launchApp && !iosDevice
         ? [
             entry,
             {
@@ -338,7 +369,18 @@ try {
           "Unsupported disposable password characters",
         );
         try {
-          adb("shell", "input", "text", `'${entry.inputSecret}'`);
+          if (iosDevice) {
+            assert.match(focusedPasswordField ?? "", /^field-.*password$/);
+            iosDevice.copySecret(entry.inputSecret);
+            try {
+              await ui([
+                { longPressOn: { id: focusedPasswordField } },
+                { tapOn: "Paste" },
+              ]);
+            } finally {
+              iosDevice.copySecret("");
+            }
+          } else adb("shell", "input", "text", `'${entry.inputSecret}'`);
         } catch {
           throw new Error("Native password input failed");
         }
@@ -347,6 +389,8 @@ try {
       return;
     }
     for (const entry of commands) {
+      if (entry.tapOn?.id?.includes("password"))
+        focusedPasswordField = entry.tapOn.id;
       if (entry.launchApp) entry.launchApp.permissions ??= { all: "unset" };
       if (typeof entry.inputText === "string") secrets.add(entry.inputText);
       if (entry.openLink?.link) {
@@ -410,31 +454,45 @@ try {
           .join("\n"),
       );
       try {
-        command(
-          "adb",
-          [
-            "-s",
-            serial,
-            "shell",
-            "uiautomator",
-            "dump",
-            "/sdcard/tender-e2e.xml",
-          ],
-          { timeout: 15000 },
-        );
-        writeFileSync(
-          path.join(output, `${stage}-hierarchy.xml`),
-          redact(adb("shell", "cat", "/sdcard/tender-e2e.xml")),
-        );
+        if (iosDevice) {
+          const hierarchy = command(
+            maestro,
+            ["--device", serial, "hierarchy"],
+            { timeout: 15000 },
+          );
+          writeFileSync(
+            path.join(output, `${stage}-hierarchy.txt`),
+            redact(hierarchy),
+          );
+        } else {
+          command(
+            "adb",
+            [
+              "-s",
+              serial,
+              "shell",
+              "uiautomator",
+              "dump",
+              "/sdcard/tender-e2e.xml",
+            ],
+            { timeout: 15000 },
+          );
+          writeFileSync(
+            path.join(output, `${stage}-hierarchy.xml`),
+            redact(adb("shell", "cat", "/sdcard/tender-e2e.xml")),
+          );
+        }
       } catch {
         console.error(`Native ${stage}: UI hierarchy was unavailable`);
       } finally {
         try {
-          command(
-            "adb",
-            ["-s", serial, "shell", "rm", "-f", "/sdcard/tender-e2e.xml"],
-            { timeout: 10000 },
-          );
+          if (!iosDevice) {
+            command(
+              "adb",
+              ["-s", serial, "shell", "rm", "-f", "/sdcard/tender-e2e.xml"],
+              { timeout: 10000 },
+            );
+          }
         } catch {
           /* Final app/device cleanup still runs. */
         }
@@ -443,13 +501,16 @@ try {
     }
   }
   const clear = () =>
-    assert.equal(adb("shell", "pm", "clear", appId).trim(), "Success");
+    iosDevice
+      ? iosDevice.clear()
+      : assert.equal(adb("shell", "pm", "clear", appId).trim(), "Success");
   async function scenario(name, fn) {
     stage = name;
     console.log(`Native case: ${name}`);
     const users = [];
     const deviceFiles = [];
     const fixture = (extension, bytes) => {
+      if (iosDevice) return iosDevice.fixture(extension, bytes);
       assert.ok(["pdf", "png"].includes(extension));
       const name = `tender-${randomUUID()}.${extension}`;
       const local = path.join(stack.root, name);
@@ -548,17 +609,22 @@ try {
       // Preserve only the last screenshot. Secrets are never included in logs or reports.
       if (!name.includes("code")) {
         try {
-          adb("shell", "screencap", "-p", "/sdcard/tender-e2e.png");
-          adb(
-            "pull",
-            "/sdcard/tender-e2e.png",
-            path.join(output, `${name}.png`),
-          );
+          if (iosDevice) iosDevice.screenshot(path.join(output, `${name}.png`));
+          else {
+            adb("shell", "screencap", "-p", "/sdcard/tender-e2e.png");
+            adb(
+              "pull",
+              "/sdcard/tender-e2e.png",
+              path.join(output, `${name}.png`),
+            );
+          }
         } catch {
           console.error(`Native ${name}: screenshot was unavailable`);
         } finally {
           try {
-            adb("shell", "rm", "-f", "/sdcard/tender-e2e.png");
+            if (!iosDevice) {
+              adb("shell", "rm", "-f", "/sdcard/tender-e2e.png");
+            }
           } catch {
             /* The final cleanup remains required. */
           }
@@ -639,13 +705,16 @@ try {
   stage = "native-startup";
   console.log(stage);
   await ui([
-    { launchApp: { clearState: true } },
+    { launchApp: { clearState: !iosDevice } },
     {
       extendedWaitUntil: { visible: "Welcome to Flutterings", timeout: 30000 },
     },
   ]);
   const flows = [];
-  await runFlows({ scenario: async (name, fn) => flows.push({ name, fn }) });
+  await runFlows({
+    platform,
+    scenario: async (name, fn) => flows.push({ name, fn }),
+  });
   assert.equal(flows.length, scenarioCount);
   assert.equal(new Set(flows.map(({ name }) => name)).size, scenarioCount);
   // Run device-boundary cases first to expose native failures before repeating
@@ -666,33 +735,49 @@ try {
   console.error(report.error);
   if (installed && stage === "native-startup") {
     try {
-      adb("shell", "screencap", "-p", "/sdcard/tender-e2e.png");
-      adb(
-        "pull",
-        "/sdcard/tender-e2e.png",
-        path.join(output, "native-startup.png"),
-      );
-      adb("shell", "rm", "/sdcard/tender-e2e.png");
+      if (iosDevice)
+        iosDevice.screenshot(path.join(output, "native-startup.png"));
+      else {
+        adb("shell", "screencap", "-p", "/sdcard/tender-e2e.png");
+        adb(
+          "pull",
+          "/sdcard/tender-e2e.png",
+          path.join(output, "native-startup.png"),
+        );
+        adb("shell", "rm", "/sdcard/tender-e2e.png");
+      }
     } catch {
       /* The failed report already records startup failure. */
     }
   }
 } finally {
-  try {
-    if (installed) {
-      adb("shell", "pm", "clear", appId);
-      adb("uninstall", appId);
-      assert.equal(adb("shell", "pm", "list", "packages", appId).trim(), "");
+  const cleanupErrors = [];
+  const cleanup = async (action) => {
+    try {
+      await action();
+    } catch {
+      cleanupErrors.push(true);
     }
-    if (reversePort) adb("reverse", "--remove", `tcp:${reversePort}`);
-    if (server) {
+  };
+  if (iosDevice) await cleanup(() => iosDevice.close());
+  else {
+    if (installed)
+      await cleanup(() => {
+        adb("shell", "pm", "clear", appId);
+        adb("uninstall", appId);
+        assert.equal(adb("shell", "pm", "list", "packages", appId).trim(), "");
+      });
+    if (reversePort)
+      await cleanup(() => adb("reverse", "--remove", `tcp:${reversePort}`));
+  }
+  if (server)
+    await cleanup(async () => {
       server.closeAllConnections();
       await new Promise((r) => server.close(r));
-    }
-    if (stack) await stack.close();
-    report.cleanup = !report.setupCleanupFailed;
-  } catch {
-    report.cleanup = false;
+    });
+  if (stack) await cleanup(() => stack.close());
+  report.cleanup = !report.setupCleanupFailed && cleanupErrors.length === 0;
+  if (!report.cleanup) {
     report.cleanupError = "Owned test resources could not all be removed";
   }
   report.status =

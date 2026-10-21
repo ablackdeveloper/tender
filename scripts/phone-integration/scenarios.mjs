@@ -78,7 +78,7 @@ async function readMail(ctx) {
   }
   throw new Error("Disposable mailbox did not receive the requested email");
 }
-export async function runFlows({ scenario }) {
+export async function runFlows({ scenario, platform = "android" }) {
   await scenario("first-use-onboarding", async (c) => {
     const user = await c.fresh({ complete: false });
     await login({ ...c, user }, "magiclink", "Setting your due date");
@@ -353,8 +353,8 @@ export async function runFlows({ scenario }) {
       ...field("document-title", "Synthetic cancelled document"),
       scrollTo("Choose and upload document"),
       tap("Choose and upload document"),
-      visible("Show roots"),
-      { back: {} },
+      visible(platform === "ios" ? "Cancel" : "Show roots"),
+      platform === "ios" ? tap("Cancel") : { back: {} },
       scrollTo("Choose and upload document"),
       visible("Choose and upload document"),
     ]);
@@ -376,8 +376,9 @@ export async function runFlows({ scenario }) {
       ...field("document-title", "Synthetic private document"),
       scrollTo("Choose and upload document"),
       tap("Choose and upload document"),
-      tap("Show roots"),
-      tap("Downloads"),
+      ...(platform === "ios"
+        ? [tap("Browse"), tap("On My iPhone"), tap("Tender Fixtures")]
+        : [tap("Show roots"), tap("Downloads")]),
       tap(name),
     ]);
     // Check durable state before the viewport assertion, so an upload failure
@@ -450,7 +451,7 @@ export async function runFlows({ scenario }) {
       },
       tap("Create and share export"),
       visible(".*tender-account-export.*"),
-      { back: {} },
+      platform === "ios" ? tap("Close") : { back: {} },
       scrollTo(
         "Your account export was prepared in the system share sheet.",
         "UP",
@@ -467,7 +468,7 @@ export async function runFlows({ scenario }) {
         scrollUntilVisible: { element: "Record voice note", direction: "DOWN" },
       },
       tap("Record voice note"),
-      tap("Don.t allow"),
+      tap("Don.t [Aa]llow"),
       scrollTo("Microphone permission was not granted."),
       visible("Microphone permission was not granted."),
     ]);
