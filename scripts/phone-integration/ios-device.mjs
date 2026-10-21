@@ -47,8 +47,25 @@ export function createIosDevice({ runId, appId }) {
       assert.match(serial, /^[0-9A-F-]{36}$/i);
       report.iosVersion = runtimes[0].version;
       report.xcodeVersion = command("xcodebuild", ["-version"]).trim();
-      sim("boot", serial);
-      sim("bootstatus", serial, "-b");
+      // A new runtime on a cold CI Mac must initialize its data before the
+      // simulator can accept UI commands. Record the phase without device data.
+      for (const [phase, args, timeout] of [
+        ["boot", ["boot", serial], 300000],
+        ["boot readiness", ["bootstatus", serial, "-b"], 600000],
+      ]) {
+        console.log(`iOS simulator: ${phase}`);
+        const started = Date.now();
+        try {
+          command("xcrun", ["simctl", ...args], { timeout });
+        } catch (error) {
+          throw new Error(`iOS simulator ${phase}: ${error.message}`);
+        } finally {
+          (report.simulatorSetup ??= []).push({
+            phase,
+            elapsedMs: Date.now() - started,
+          });
+        }
+      }
     },
     async build({ app, env, root, cert, output, execute, report }) {
       const ios = path.join(app, "ios");
