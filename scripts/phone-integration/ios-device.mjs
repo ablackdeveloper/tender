@@ -8,7 +8,12 @@ import {
   existsSync,
 } from "node:fs";
 import path from "node:path";
-import { command } from "./stack.mjs";
+import { command as nativeCommand } from "./stack.mjs";
+
+// simctl can keep waiting after SIGTERM during a cold boot. Every synchronous
+// command here belongs to this adapter and must honor its configured deadline.
+const command = (file, args, options = {}) =>
+  nativeCommand(file, args, { killSignal: "SIGKILL", ...options });
 
 // This adapter owns a simulator it creates itself. It never accepts a device UDID.
 export function createIosDevice({ runId, appId }) {
@@ -77,7 +82,7 @@ export function createIosDevice({ runId, appId }) {
       assert.match(created, /^[0-9A-F-]{36}$/i);
       serial = created;
     },
-    boot(report) {
+    async boot({ report, execute, output }) {
       // A new runtime on a cold CI Mac must initialize its data before the
       // simulator can accept UI commands. Record the phase without device data.
       for (const [phase, args, timeout] of [
@@ -87,7 +92,15 @@ export function createIosDevice({ runId, appId }) {
         console.log(`iOS simulator: ${phase}`);
         const started = Date.now();
         try {
-          command("xcrun", ["simctl", ...args], { timeout });
+          // The asynchronous runner kills the owned process group and closes
+          // its pipes on timeout. Keep the boot output for real-device diagnostics.
+          await execute("xcrun", ["simctl", ...args], {
+            timeout,
+            log: path.join(
+              output,
+              `simulator-${phase.replaceAll(" ", "-")}.log`,
+            ),
+          });
         } catch (error) {
           throw new Error(`iOS simulator ${phase}: ${error.message}`);
         } finally {
@@ -221,7 +234,7 @@ export function createIosDevice({ runId, appId }) {
       );
       // Image extraction and native compilation do not require a running UI.
       // Boot only after these jobs finish, leaving memory for the local backend.
-      this.boot(report);
+      await this.boot({ report, execute, output });
       this.clear();
     },
     clear() {
