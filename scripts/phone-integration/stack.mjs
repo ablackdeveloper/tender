@@ -223,12 +223,42 @@ verify_jwt = true
     ]);
     network = true;
     started = true;
-    supabase("start", "--yes", "--network-id", id);
-    const ids = command("docker", ["ps", "-q", "--filter", `name=${id}`])
+    supabase(
+      "start",
+      "--yes",
+      "--network-id",
+      id,
+      // Keep the slow Mac VM running past the CLI's short startup deadline.
+      // The bounded checks below still require actual container and API health.
+      ...(process.platform === "darwin" ? ["--ignore-health-check"] : []),
+    );
+    const ids = command("docker", ["ps", "-a", "-q", "--filter", `name=${id}`])
       .trim()
       .split(/\s+/)
       .filter(Boolean);
     assert.ok(ids.length);
+    const healthDeadline = Date.now() + 300000;
+    for (;;) {
+      const containers = JSON.parse(command("docker", ["inspect", ...ids]));
+      const stopped = containers.filter(
+        (container) => !container.State.Running || container.State.OOMKilled,
+      );
+      assert.equal(
+        stopped.length,
+        0,
+        "An owned backend container stopped or ran out of memory",
+      );
+      const pending = containers.filter(
+        (container) =>
+          container.State.Health && container.State.Health.Status !== "healthy",
+      );
+      if (!pending.length) break;
+      assert.ok(
+        Date.now() < healthDeadline,
+        `Backend health timed out: ${pending.map((container) => container.Name.replace(`_${id}`, "")).join(", ")}`,
+      );
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+    }
     for (const c of JSON.parse(command("docker", ["inspect", ...ids])))
       for (const bindings of Object.values(c.NetworkSettings.Ports ?? {}))
         for (const b of bindings ?? [])
@@ -249,6 +279,42 @@ verify_jwt = true
       clients.push(c);
       return c;
     };
+    const admin = client(status.SERVICE_ROLE_KEY);
+    const apiDeadline = Date.now() + 300000;
+    for (;;) {
+      const [users, profiles, buckets] = await Promise.all([
+        admin.auth.admin.listUsers({ page: 1, perPage: 1 }),
+        admin.from("profiles").select("id").limit(1),
+        admin.storage.listBuckets(),
+      ]);
+      if (!users.error && !profiles.error && !buckets.error) {
+        assert.equal(
+          users.data.users.length,
+          0,
+          "The owned backend must start without accounts",
+        );
+        assert.equal(
+          profiles.data.length,
+          0,
+          "The owned backend must start without profiles",
+        );
+        for (const bucket of ["tender-documents", "tender-media"])
+          assert.equal(
+            buckets.data.find((entry) => entry.id === bucket)?.public,
+            false,
+            "Required bucket must exist and be private",
+          );
+        break;
+      }
+      assert.ok(
+        Date.now() < apiDeadline,
+        "Auth, database, or Storage API readiness timed out",
+      );
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+    }
+    console.log(
+      "Local backend: containers healthy; Auth, database, and Storage ready; no accounts or profiles",
+    );
     edge = spawn(
       cli,
       [
@@ -263,10 +329,18 @@ verify_jwt = true
       ],
       { cwd: root, env, stdio: "ignore" },
     );
-    for (let i = 0; ; i++) {
-      assert.ok(i < 120, "Edge startup timed out");
+    let edgeError;
+    edge.on("error", (error) => {
+      edgeError = error;
+    });
+    const edgeDeadline = Date.now() + 180000;
+    for (;;) {
+      if (edgeError) throw edgeError;
+      assert.equal(edge.exitCode, null, "Edge server exited during startup");
+      assert.ok(Date.now() < edgeDeadline, "Edge startup timed out");
       const ready = await fetch(`${apiUrl}/functions/v1/account-data`, {
         method: "OPTIONS",
+        signal: AbortSignal.timeout(3000),
       }).catch(() => null);
       if (ready?.status === 204) break;
       await new Promise((r) => setTimeout(r, 500));
@@ -276,7 +350,7 @@ verify_jwt = true
       root,
       apiUrl,
       anonKey: status.ANON_KEY,
-      admin: client(status.SERVICE_ROLE_KEY),
+      admin,
       client,
       mailUrl: `http://127.0.0.1:${mail}`,
       close,
