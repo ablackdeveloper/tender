@@ -652,6 +652,7 @@ try {
     };
     try {
       clear();
+      if (!iosDevice) adb("logcat", "-c", "-b", "crash");
       const user = await fresh();
       await ui([
         { launchApp: { clearState: false } },
