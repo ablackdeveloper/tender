@@ -10,10 +10,10 @@ permissions:
   contents: read
 jobs:
   ios:
-    runs-on: macos-15-intel
+    runs-on: macos-26-intel
     timeout-minutes: 120
     env:
-      DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
       TENDER_NATIVE_PLATFORM: ios
       TENDER_NATIVE_E2E: "1"
       TENDER_TEST_PASSWORD_SOURCE: disposable-generated

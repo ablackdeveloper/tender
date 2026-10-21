@@ -32,6 +32,14 @@ export function createIosDevice({ runId, appId }) {
         "darwin",
         "iOS E2E requires a Mac with Xcode",
       );
+      report.xcodeVersion = command("xcodebuild", ["-version"]).trim();
+      const version = report.xcodeVersion.match(/^Xcode (\d+)\.(\d+)/);
+      assert.ok(
+        version &&
+          (Number(version[1]) > 26 ||
+            (Number(version[1]) === 26 && Number(version[2]) >= 4)),
+        "Expo SDK 57 requires Xcode 26.4 or later",
+      );
       const runtimes = JSON.parse(sim("list", "runtimes", "--json"))
         .runtimes.filter((r) => r.isAvailable && r.identifier.includes(".iOS-"))
         .sort((a, b) =>
@@ -46,7 +54,6 @@ export function createIosDevice({ runId, appId }) {
       ).trim();
       assert.match(serial, /^[0-9A-F-]{36}$/i);
       report.iosVersion = runtimes[0].version;
-      report.xcodeVersion = command("xcodebuild", ["-version"]).trim();
       // A new runtime on a cold CI Mac must initialize its data before the
       // simulator can accept UI commands. Record the phase without device data.
       for (const [phase, args, timeout] of [

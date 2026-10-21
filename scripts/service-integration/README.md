@@ -74,7 +74,7 @@ Still separate from emulator evidence: physical camera/microphone quality, inter
 
 ## iOS simulator and physical phones
 
-`pnpm test:flows:ios` uses the same 19 integration/E2E cases on macOS. The `iOS phone E2E` workflow uses a standard Intel macOS runner, Xcode 26.3, Maestro 2.11.0, and an owned Colima Linux VM for local Supabase. No hosted backend, Apple account, signing certificate, or unit test is used. The simulator build includes the production app UI and services.
+`pnpm test:flows:ios` uses the same 19 integration/E2E cases on macOS. The `iOS phone E2E` workflow uses a standard Intel macOS 26 runner, Xcode 26.6, Maestro 2.11.0, and an owned Colima Linux VM for local Supabase. No hosted backend, Apple account, signing certificate, or unit test is used. The simulator build includes the production app UI and services.
 
 The adapter creates and later deletes its own simulator. Before each case it reinstalls the test app, resets the simulator keychain, restores the run-only localhost certificate, resets permissions, and verifies empty app documents/cache directories. A separate small fixture app supplies synthetic documents to the real Files picker. It does not enable file sharing in the production app. Disposable passwords enter through the simulator clipboard and the native Paste action; the clipboard is cleared immediately. Password values never enter Maestro flow files.
 
