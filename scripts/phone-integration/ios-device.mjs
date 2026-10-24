@@ -23,6 +23,7 @@ const command = (file, args, options = {}) =>
 // This adapter owns a simulator it creates itself. It never accepts a device UDID.
 export function createIosDevice({ runId, appId }) {
   let serial, appBundle, certificate, helperBundle, appExecutable;
+  let simulatorUi;
   let creationAttempted = false;
   const simulatorName = `Tender E2E ${runId}`;
   const helperId = "com.tender.fixtures.e2e";
@@ -52,6 +53,10 @@ export function createIosDevice({ runId, appId }) {
         "iOS E2E requires a Mac with Xcode",
       );
       report.xcodeVersion = command("xcodebuild", ["-version"]).trim();
+      const developer =
+        process.env.DEVELOPER_DIR ?? command("xcode-select", ["-p"]).trim();
+      simulatorUi = path.join(developer, "Applications/Simulator.app");
+      assert.ok(existsSync(simulatorUi), "Selected Xcode has no Simulator UI");
       const version = report.xcodeVersion.match(/^Xcode (\d+)\.(\d+)/);
       assert.ok(
         version &&
@@ -137,6 +142,19 @@ export function createIosDevice({ runId, appId }) {
           });
         }
       }
+      // Match Maestro's own LocalSimulatorUtils.launchSimulator setup. simctl
+      // boot alone does not open the Simulator UI host. Target only the device
+      // created by this harness; do not select or reset another simulator.
+      console.log(`iOS ${label}: open Simulator UI for owned device`);
+      await execute(
+        "open",
+        ["-a", simulatorUi, "--args", "-CurrentDeviceUDID", serial],
+        {
+          timeout: 60000,
+          log: path.join(output, `${label}-ui-host.log`),
+        },
+      );
+      report.simulatorUiHost = "Selected Xcode Simulator.app; owned device only";
     },
     shutdown() {
       sim("shutdown", serial);
