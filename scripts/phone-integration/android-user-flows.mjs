@@ -283,6 +283,7 @@ export async function runAndroidFlows({ scenario, login }) {
     assert.ok(before.every((row) => row.quiet_hours_start !== "99:99"));
     await c.ui([
       ...fill("Start (24-hour HH:MM)", "21:30"),
+      ...fill("End (24-hour HH:MM)", "08:00"),
       scroll("Save choices"),
       tap("Save choices"),
       scroll("Notification choices saved.", "UP"),

@@ -816,11 +816,8 @@ try {
       result.cleanup,
       "Stop after failed case cleanup; do not reuse uncertain state",
     );
-    assert.equal(
-      result.status,
-      "passed",
-      `Stop after failed native case: ${name}`,
-    );
+    // A failed UI case remains failed in the final report. Continue only after
+    // verified cleanup so one selector failure does not hide later flow defects.
   }
   stage = "native-startup";
   console.log(stage);
