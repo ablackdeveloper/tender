@@ -18,7 +18,10 @@ jobs:
     timeout-minutes: 180
     env:
       DEVELOPER_DIR: /Applications/Xcode_26.5.app/Contents/Developer
-      TENDER_IOS_VERSION: "26.5"
+      # 26.5 repeatedly failed inside XCTest Accessibility initialization,
+      # including with Simulator.app open. Exercise the same cases on the
+      # installed 26.2 runtime; never silently fall back to another version.
+      TENDER_IOS_VERSION: "26.2"
       TENDER_NATIVE_PLATFORM: ios
       TENDER_NATIVE_E2E: "1"
       TENDER_NATIVE_SHARD_INDEX: ${{ matrix.shard }}
