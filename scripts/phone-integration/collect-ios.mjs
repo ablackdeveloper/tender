@@ -43,6 +43,7 @@ for (let index = 0; index < count; index++) {
       cleanup: report.cleanup,
       vmCleanup: vm.cleanup,
       driverReadiness: report.driverReadiness,
+      driverBuild: report.driverBuild,
       results: report.results.map(({ name, status, cleanup, mailCleanup }) => ({
         name,
         status,
@@ -75,6 +76,9 @@ for (let index = 0; index < count; index++) {
     );
     assert.equal(report.driverReadiness?.status, "passed");
     assert.equal(report.driverReadiness?.cleanup, true);
+    assert.equal(report.driverBuild?.status, "passed");
+    assert.equal(report.driverBuild?.cleanup, true);
+    assert.equal(report.driverBuild?.patch, "springboard-alert-hierarchy-v1");
     assert.equal(report.cleanup, true, "Harness cleanup failed");
     assert.equal(vm.cleanup, true, "VM cleanup failed");
     for (const test of report.results) {
@@ -113,6 +117,7 @@ result.cleanup =
       s.cleanup &&
       s.vmCleanup &&
       s.driverReadiness?.cleanup &&
+      s.driverBuild?.cleanup &&
       s.results.every((r) => r.cleanup && r.mailCleanup),
   );
 if (result.issues.length === 0 && result.cleanup) result.status = "passed";

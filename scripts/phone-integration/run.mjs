@@ -177,6 +177,20 @@ try {
   if (shardCount > 1) report.kind = "ios-native-e2e-shard";
   save();
   if (iosDevice) {
+    assert.ok(
+      process.env.TENDER_IOS_DRIVER_RECEIPT,
+      "Prepare the pinned iOS UI driver first",
+    );
+    report.driverBuild = JSON.parse(
+      readFileSync(process.env.TENDER_IOS_DRIVER_RECEIPT, "utf8"),
+    );
+    assert.equal(report.driverBuild.status, "passed");
+    assert.equal(report.driverBuild.cleanup, true);
+    assert.equal(
+      report.driverBuild.upstream,
+      "c8c361be1cc89b2e742f185466a302a22778be6b",
+    );
+    assert.equal(report.driverBuild.patch, "springboard-alert-hierarchy-v1");
     process.env.MAESTRO_DRIVER_STARTUP_TIMEOUT ??= "300000";
     iosDevice.prepare(report);
     serial = iosDevice.serial;
@@ -784,7 +798,28 @@ try {
         }
       }
     } finally {
-      try {
+      const cleanupFailures = [];
+      const verifyCleanup = async (phase, action) => {
+        try {
+          await action();
+        } catch (error) {
+          cleanupFailures.push({ phase, error: redact(error.message) });
+          console.error(`Native ${name} cleanup failed: ${phase}`);
+        }
+      };
+      await verifyCleanup("device state", async () => {
+        // A failed flow can leave a SpringBoard alert over an uninstalled app.
+        // Reboot the owned simulator before reset so it cannot block the helper.
+        // The failed flow stays failed; this is only teardown recovery.
+        if (iosDevice && result.status === "failed") {
+          iosDevice.shutdown();
+          await iosDevice.boot({
+            report,
+            execute,
+            output,
+            label: `${name}-cleanup`,
+          });
+        }
         clear();
         for (const file of deviceFiles) {
           assert.match(
@@ -794,7 +829,9 @@ try {
           adb("shell", "rm", file);
           adb("shell", "test", "!", "-e", file);
         }
-        for (const user of users) {
+      });
+      for (const user of users) {
+        await verifyCleanup("owned account and data", async () => {
           for (const table of ["documents", "media_assets"]) {
             const assets = await stack.admin
               .from(table)
@@ -834,13 +871,17 @@ try {
             .eq("id", user.id);
           assert.ifError(rows.error);
           assert.equal(rows.data.length, 0);
-        }
+        });
+      }
+      await verifyCleanup("inbox", async () => {
         await stack.flushMail();
         result.mailCleanup = true;
-        result.cleanup = true;
-      } catch {
+      });
+      result.cleanup = cleanupFailures.length === 0;
+      if (!result.cleanup) {
         result.status = "failed";
-        result.failure = "Case cleanup failed";
+        result.failure ??= "Case cleanup failed";
+        result.cleanupFailures = cleanupFailures;
       }
       report.results.push(result);
       secrets.clear();
@@ -865,12 +906,46 @@ try {
   }
   stage = "native-startup";
   console.log(stage);
-  await ui([
-    { launchApp: { clearState: !iosDevice } },
-    {
-      extendedWaitUntil: { visible: "Welcome to Flutterings", timeout: 30000 },
-    },
-  ]);
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    report.nativeStartupAttempts = attempt;
+    try {
+      await ui([
+        { launchApp: { clearState: !iosDevice } },
+        {
+          extendedWaitUntil: {
+            visible: "Welcome to Flutterings",
+            timeout: 30000,
+          },
+        },
+      ]);
+      break;
+    } catch (error) {
+      const diagnosticPath = path.join(output, "native-startup-maestro.log");
+      const diagnostic = existsSync(diagnosticPath)
+        ? readFileSync(diagnosticPath, "utf8")
+        : "";
+      if (
+        !iosDevice ||
+        attempt !== 1 ||
+        !diagnostic.includes("IOSDriverTimeoutException") ||
+        diagnostic.includes(" > Flow")
+      )
+        throw error;
+      // CI observed XCTest failing to load Accessibility after the app build.
+      // Recover once before any account/case exists, only if no UI command ran.
+      // An app assertion failure or a failure inside a case is never retried.
+      report.nativeStartupRecovery =
+        "Driver startup failed before UI commands; owned simulator rebooted once";
+      iosDevice.shutdown();
+      await iosDevice.boot({
+        report,
+        execute,
+        output,
+        label: "native-startup-recovery",
+      });
+      clear();
+    }
+  }
   for (const flow of flows) await scenario(flow.name, flow.fn);
 } catch (error) {
   if (error.cleanupFailed) report.setupCleanupFailed = true;
