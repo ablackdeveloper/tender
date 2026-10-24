@@ -405,6 +405,15 @@ try {
   let sequence = 0;
   let focusedPasswordField;
   async function ui(commands) {
+    if (!iosDevice) {
+      // Fixed internal routes need a native VIEW intent, not Maestro's web-link
+      // verification. Leave auth links with query/fragment tokens untouched.
+      commands = commands.map((entry) =>
+        /^tender:\/\/[a-z0-9/-]*$/.test(entry.openLink?.link ?? "")
+          ? { androidOpenLink: entry.openLink.link }
+          : entry,
+      );
+    }
     if (!iosDevice && commands.some((entry) => entry.androidOpenLink)) {
       let batch = [];
       for (const entry of commands) {
