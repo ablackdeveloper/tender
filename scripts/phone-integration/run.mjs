@@ -14,7 +14,7 @@ import http from "node:http";
 import { once } from "node:events";
 import { startStack, command, workspace } from "./stack.mjs";
 import { reservePort } from "../run-native-postgres-integration.mjs";
-import { runFlows, scenarioCount } from "./scenarios.mjs";
+import { getFlowPlan, scenarioCount } from "./flow-plan.mjs";
 import { androidScenarioCount } from "./android-user-flows.mjs";
 import { createIosDevice } from "./ios-device.mjs";
 import { saveMaestroDiagnostics } from "./maestro-diagnostics.mjs";
@@ -63,6 +63,7 @@ let stack,
   reversePort,
   installed = false;
 let stage = "preflight";
+let flows;
 const secrets = new Set();
 const redact = (value) => {
   let text = value;
@@ -163,6 +164,18 @@ try {
     "1",
     "Explicit native test opt-in required",
   );
+  const shardIndex = Number(process.env.TENDER_NATIVE_SHARD_INDEX ?? "0");
+  const shardCount = Number(process.env.TENDER_NATIVE_SHARD_COUNT ?? "1");
+  flows = await getFlowPlan(platform, shardIndex, shardCount);
+  report.shard = { index: shardIndex, count: shardCount };
+  report.totalScenarios = report.plannedScenarios;
+  report.plannedScenarios = flows.length;
+  report.plannedScenarioNames = flows.map(({ name }) => name);
+  report.sourceCommit = process.env.GITHUB_SHA ?? null;
+  report.ciRunId = process.env.GITHUB_RUN_ID ?? null;
+  report.ciRunAttempt = process.env.GITHUB_RUN_ATTEMPT ?? null;
+  if (shardCount > 1) report.kind = "ios-native-e2e-shard";
+  save();
   if (iosDevice) {
     iosDevice.prepare(report);
     serial = iosDevice.serial;
@@ -484,6 +497,28 @@ try {
       }
       if (batch.length) await ui(batch);
       return;
+    }
+    // autoVerify is Android-only. Accept only the native prompt for this app.
+    if (iosDevice) {
+      const prompt = "(?s)Open in .*Flutterings\\s+Isolated Tests.*";
+      commands = commands.flatMap((entry) =>
+        entry.openLink
+          ? [
+              entry,
+              {
+                runFlow: {
+                  when: { visible: prompt },
+                  commands: [
+                    { tapOn: { text: "^Open$" } },
+                    {
+                      extendedWaitUntil: { notVisible: prompt, timeout: 10000 },
+                    },
+                  ],
+                },
+              },
+            ]
+          : [entry],
+      );
     }
     for (const entry of commands) {
       if (entry.tapOn?.id?.includes("password"))
@@ -811,16 +846,22 @@ try {
       secrets.clear();
       save();
       console.log(`${name}: ${result.status}; cleanup=${result.cleanup}`);
+      if (iosDevice && process.env.GITHUB_ACTIONS === "true")
+        console.log(
+          `::notice title=iOS E2E shard ${report.shard.index}::${name}: ${result.status}; cleanup=${result.cleanup}`,
+        );
     }
     assert.ok(
       result.cleanup,
       "Stop after failed case cleanup; do not reuse uncertain state",
     );
-    assert.equal(
-      result.status,
-      "passed",
-      `Stop after failed native case: ${name}`,
-    );
+    if (!iosDevice)
+      assert.equal(
+        result.status,
+        "passed",
+        `Stop after failed native case: ${name}`,
+      );
+    // Continue iOS only after verified cleanup; failed cases remain failed.
   }
   stage = "native-startup";
   console.log(stage);
@@ -830,30 +871,6 @@ try {
       extendedWaitUntil: { visible: "Welcome to Flutterings", timeout: 30000 },
     },
   ]);
-  const flows = [];
-  await runFlows({
-    platform,
-    scenario: async (name, fn) => flows.push({ name, fn }),
-  });
-  assert.equal(flows.length, report.plannedScenarios);
-  assert.equal(
-    new Set(flows.map(({ name }) => name)).size,
-    report.plannedScenarios,
-  );
-  // Run device-boundary cases first to expose native failures before repeating
-  // the longer account sequence. Every passing run requires the full catalog.
-  const deviceCases = new Set([
-    "document-picker-cancel",
-    "document-upload-native-picker",
-    "export-native-share-sheet",
-    "microphone-permission-denial",
-  ]);
-  flows.sort(
-    (a, b) =>
-      Number(b.name.startsWith("android-")) -
-        Number(a.name.startsWith("android-")) ||
-      Number(deviceCases.has(b.name)) - Number(deviceCases.has(a.name)),
-  );
   for (const flow of flows) await scenario(flow.name, flow.fn);
 } catch (error) {
   if (error.cleanupFailed) report.setupCleanupFailed = true;
