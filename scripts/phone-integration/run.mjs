@@ -201,7 +201,7 @@ try {
     assert.deepEqual(report.driverBuild.onlyTestIdentifiers, [
       "maestro_driver_iosUITests/testHttpServer",
     ]);
-    process.env.MAESTRO_DRIVER_STARTUP_TIMEOUT ??= "300000";
+    process.env.MAESTRO_DRIVER_STARTUP_TIMEOUT ??= "600000";
     iosDevice.prepare(report);
     serial = iosDevice.serial;
     // First boot performs OS data migration. Finish it before the local

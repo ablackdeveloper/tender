@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import {
   existsSync,
@@ -9,22 +9,32 @@ import {
   writeFileSync,
 } from "node:fs";
 import net from "node:net";
+import { freemem, loadavg, totalmem } from "node:os";
 import path from "node:path";
+import { promisify } from "node:util";
 import { saveMaestroDiagnostics } from "./maestro-diagnostics.mjs";
 
 // Maestro 2.11's official MCP interface retains its XCTest session between
 // command groups. One process belongs to one case; no session crosses cases.
 const driverPort = 22087;
 async function driverListening() {
-  return new Promise((resolve) => {
-    const socket = net.connect({ host: "127.0.0.1", port: driverPort });
-    const finish = (value) => {
-      socket.destroy();
-      resolve(value);
-    };
-    socket.once("connect", () => finish(true));
-    socket.once("error", (error) => finish(error.code !== "ECONNREFUSED"));
-    socket.setTimeout(1000, () => finish(true)); // An uncertain owner is not free.
+  return new Promise((resolve, reject) => {
+    // A cold CI host can delay a TCP refusal beyond a short client timeout.
+    // Ask the kernel whether the exact loopback port can be bound instead.
+    const probe = net.createServer();
+    probe.once("error", (error) => {
+      if (error.code === "EADDRINUSE") resolve(true);
+      else
+        reject(
+          new Error(`Cannot verify XCTest port ownership (${error.code})`),
+        );
+    });
+    probe.listen(
+      { host: "127.0.0.1", port: driverPort, exclusive: true },
+      () => {
+        probe.close((error) => (error ? reject(error) : resolve(false)));
+      },
+    );
   });
 }
 
@@ -169,6 +179,31 @@ export async function createIosMaestroSession({
       );
     });
   };
+  const processGroup = async () => {
+    if (!child.pid) return [];
+    const { stdout } = await promisify(execFile)(
+      "/bin/ps",
+      ["-axo", "pid=,pgid=,uid=,stat="],
+      { timeout: 10000, killSignal: "SIGKILL", maxBuffer: 1048576 },
+    );
+    return stdout
+      .split("\n")
+      .filter((line) => line.trim())
+      .map((line) => {
+        const fields = line.trim().split(/\s+/);
+        assert.equal(fields.length, 4, "Invalid process-state response");
+        assert.ok(fields.slice(0, 3).every((value) => /^\d+$/.test(value)));
+        return {
+          pid: Number(fields[0]),
+          group: Number(fields[1]),
+          uid: Number(fields[2]),
+          state: fields[3],
+        };
+      })
+      .filter((entry) => entry.group === child.pid);
+  };
+  const live = (entries) =>
+    entries.filter((entry) => !entry.state.startsWith("Z"));
   const close = async () => {
     if (closed) {
       assert.equal(receipt.cleanup, true, "Earlier Maestro cleanup failed");
@@ -188,40 +223,79 @@ export async function createIosMaestroSession({
     } finally {
       clearTimeout(timer);
     }
-    const groupAlive = () => {
-      if (!child.pid) return false;
-      try {
-        process.kill(-child.pid, 0);
-        return true;
-      } catch (error) {
-        if (error.code === "ESRCH") return false;
-        throw error;
-      }
-    };
-    if (groupAlive()) {
-      try {
-        process.kill(-child.pid, "SIGKILL");
-      } catch (error) {
-        if (error.code !== "ESRCH") throw error;
-      }
-      await Promise.race([
-        exited,
-        new Promise((resolve) => {
-          timer = setTimeout(resolve, 10000);
-        }),
-      ]);
-      clearTimeout(timer);
-    }
     try {
+      let members = await processGroup();
+      if (live(members).length) {
+        assert.ok(
+          live(members).every((entry) => entry.uid === process.getuid()),
+          "Owned process group contains a different user",
+        );
+        try {
+          process.kill(-child.pid, "SIGKILL");
+        } catch (error) {
+          // XNU excludes zombies from group signals and can return EPERM for
+          // a group whose members have all exited. Never ignore a live owner.
+          if (error.code !== "ESRCH" && error.code !== "EPERM") throw error;
+          members = await processGroup();
+          assert.equal(
+            live(members).length,
+            0,
+            "Owned process termination failed",
+          );
+        }
+        try {
+          await Promise.race([
+            exited,
+            new Promise((resolve) => {
+              timer = setTimeout(resolve, 10000);
+            }),
+          ]);
+        } finally {
+          clearTimeout(timer);
+        }
+      }
       assert.ok(stopped, "Owned Maestro process did not exit");
-      const deadline = Date.now() + 10000;
-      while (groupAlive() && Date.now() < deadline)
-        await new Promise((resolve) => setTimeout(resolve, 100));
+      const deadline = Date.now() + 30000;
+      while (members.length && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 500));
+        members = await processGroup();
+      }
       assert.equal(
-        groupAlive(),
-        false,
-        "Owned Maestro child processes survived cleanup",
+        live(members).length,
+        0,
+        "Live Maestro child processes survived cleanup",
       );
+      receipt.exitedProcessEntries = members;
+      // Simulator-launched XCTest apps are managed by launchd, outside the JVM
+      // process group. Remove the exact driver bundle from this owned device.
+      const driverApp = "dev.mobile.maestro-driver-iosUITests.xctrunner";
+      const installed = async () => {
+        const { stdout } = await promisify(execFile)(
+          "xcrun",
+          ["simctl", "listapps", serial],
+          { timeout: 120000, killSignal: "SIGKILL", maxBuffer: 8388608 },
+        );
+        const inventory = path.join(directory, "installed-apps.plist");
+        writeFileSync(inventory, stdout, { mode: 0o600 });
+        const converted = await promisify(execFile)(
+          "plutil",
+          ["-convert", "json", "-o", "-", inventory],
+          { timeout: 10000, killSignal: "SIGKILL", maxBuffer: 8388608 },
+        );
+        return Object.hasOwn(JSON.parse(converted.stdout), driverApp);
+      };
+      if (await installed())
+        await promisify(execFile)(
+          "xcrun",
+          ["simctl", "uninstall", serial, driverApp],
+          { timeout: 120000, killSignal: "SIGKILL" },
+        );
+      assert.equal(
+        await installed(),
+        false,
+        "Owned XCTest app survived cleanup",
+      );
+      receipt.driverAppRemoved = true;
       assert.equal(
         await driverListening(),
         false,
@@ -272,6 +346,41 @@ export async function createIosMaestroSession({
     const tools = await request("tools/list", {}, receipt.handshakeTimeoutMs);
     assert.ok(tools.tools?.some((tool) => tool.name === "run"));
   } catch (error) {
+    // Record only process names and resource counts, never command arguments
+    // or environment values. This distinguishes a stalled launcher from a JVM
+    // or XCTest startup failure without exposing case credentials.
+    receipt.failureResources = {
+      freeMemoryBytes: freemem(),
+      totalMemoryBytes: totalmem(),
+      loadAverage: loadavg(),
+    };
+    if (child.pid) {
+      try {
+        const { stdout } = await promisify(execFile)(
+          "/bin/ps",
+          ["-axo", "pid=,ppid=,pgid=,stat=,%cpu=,rss=,comm="],
+          { timeout: 5000, killSignal: "SIGKILL", maxBuffer: 1048576 },
+        );
+        receipt.failureProcesses = stdout
+          .split("\n")
+          .map((line) =>
+            line.match(
+              /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\S+)\s+([\d.]+)\s+(\d+)\s+(.+)$/,
+            ),
+          )
+          .filter((match) => match && Number(match[3]) === child.pid)
+          .map((match) => ({
+            pid: Number(match[1]),
+            parentPid: Number(match[2]),
+            state: match[4],
+            cpuPercent: Number(match[5]),
+            residentKiB: Number(match[6]),
+            executable: path.basename(match[7]),
+          }));
+      } catch {
+        receipt.processDiagnosticsUnavailable = true;
+      }
+    }
     try {
       await close();
     } catch {
@@ -284,10 +393,14 @@ export async function createIosMaestroSession({
     receipt,
     close,
     async run(file, log) {
-      const result = await request("tools/call", {
-        name: "run",
-        arguments: { device_id: serial, files: [file] },
-      });
+      const result = await request(
+        "tools/call",
+        {
+          name: "run",
+          arguments: { device_id: serial, files: [file] },
+        },
+        receipt.batches === 0 ? 900000 : 600000,
+      );
       const texts =
         result.content
           ?.filter((item) => item.type === "text")

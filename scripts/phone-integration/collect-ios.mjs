@@ -20,6 +20,19 @@ const result = {
 const seen = [];
 const runIds = new Set();
 const driverSessionIds = new Set();
+const verifyDriverCleanup = (session) => {
+  assert.equal(session?.cleanup, true);
+  assert.equal(
+    session.driverAppRemoved,
+    true,
+    "XCTest app removal was not verified",
+  );
+  assert.ok(Array.isArray(session.exitedProcessEntries));
+  assert.ok(
+    session.exitedProcessEntries.every((entry) => entry.state.startsWith("Z")),
+    "A live driver process survived cleanup",
+  );
+};
 for (let index = 0; index < count; index++) {
   try {
     const root = path.join(
@@ -82,8 +95,8 @@ for (let index = 0; index < count; index++) {
     assert.equal(report.driverReadiness?.cleanup, true);
     assert.equal(report.driverReadiness?.failurePropagation, true);
     assert.equal(report.driverReadiness?.sessionReuse, true);
-    assert.equal(report.driverReadiness?.driverSession?.cleanup, true);
-    assert.equal(report.nativeStartupDriverSession?.cleanup, true);
+    verifyDriverCleanup(report.driverReadiness?.driverSession);
+    verifyDriverCleanup(report.nativeStartupDriverSession);
     assert.equal(report.driverBuild?.status, "passed");
     assert.equal(report.driverBuild?.cleanup, true);
     assert.equal(report.driverBuild?.patch, "springboard-alert-hierarchy-v1");
@@ -94,7 +107,7 @@ for (let index = 0; index < count; index++) {
     assert.equal(vm.cleanup, true, "VM cleanup failed");
     for (const test of report.results) {
       assert.equal(test.driverSession?.kind, "maestro-mcp-per-case");
-      assert.equal(test.driverSession.cleanup, true);
+      verifyDriverCleanup(test.driverSession);
       assert.ok(test.driverSession.batches > 0);
       assert.ok(
         !driverSessionIds.has(test.driverSession.id),

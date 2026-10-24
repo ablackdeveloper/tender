@@ -147,11 +147,11 @@ export function createIosDevice({ runId, appId }) {
       const root = mkdtempSync(path.join(tmpdir(), "tender-ios-driver-"));
       const flow = path.join(root, "readiness.yaml");
       const started = Date.now();
-      let session;
+      let session, readinessError;
       report.driverReadiness = {
         status: "running",
         cleanup: false,
-        setupTimeoutMs: 600000,
+        setupTimeoutMs: 900000,
       };
       writeFileSync(
         flow,
@@ -193,7 +193,9 @@ export function createIosDevice({ runId, appId }) {
         report.driverReadiness.status = "passed";
         console.log("iOS driver readiness: passed (not a user-flow case)");
       } catch (error) {
+        readinessError = error;
         report.driverReadiness.status = "failed";
+        report.driverReadiness.failure = redact(error.message);
         report.driverReadiness.driverSession ??= error.driverSession;
         throw error;
       } finally {
@@ -201,8 +203,12 @@ export function createIosDevice({ runId, appId }) {
           if (session) await session.close();
         } catch (error) {
           report.driverReadiness.status = "failed";
-          error.cleanupFailed = true;
-          throw error;
+          report.driverReadiness.cleanupFailure = redact(error.message);
+          if (readinessError) readinessError.cleanupFailed = true;
+          else {
+            error.cleanupFailed = true;
+            throw error;
+          }
         } finally {
           assert.equal(path.dirname(root), path.resolve(tmpdir()));
           assert.ok(path.basename(root).startsWith("tender-ios-driver-"));
