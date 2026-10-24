@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
+import { runAndroidFlows } from "./android-user-flows.mjs";
 
 export const scenarioCount = 19;
 const visible = (text) => ({
@@ -79,6 +80,7 @@ async function readMail(ctx) {
   throw new Error("Disposable mailbox did not receive the requested email");
 }
 export async function runFlows({ scenario, platform = "android" }) {
+  if (platform === "android") await runAndroidFlows({ scenario, login });
   await scenario("first-use-onboarding", async (c) => {
     const user = await c.fresh({ complete: false });
     await login({ ...c, user }, "magiclink", "Setting your due date");

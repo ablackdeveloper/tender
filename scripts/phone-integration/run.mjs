@@ -15,6 +15,7 @@ import { once } from "node:events";
 import { startStack, command, workspace } from "./stack.mjs";
 import { reservePort } from "../run-native-postgres-integration.mjs";
 import { runFlows, scenarioCount } from "./scenarios.mjs";
+import { androidScenarioCount } from "./android-user-flows.mjs";
 import { createIosDevice } from "./ios-device.mjs";
 import { saveMaestroDiagnostics } from "./maestro-diagnostics.mjs";
 
@@ -39,7 +40,8 @@ const report = {
   runId,
   status: "running",
   kind: `${platform}-native-e2e`,
-  plannedScenarios: scenarioCount,
+  plannedScenarios:
+    scenarioCount + (platform === "android" ? androidScenarioCount : 0),
   results: [],
   cleanup: false,
   startedAt: new Date().toISOString(),
@@ -833,10 +835,13 @@ try {
     platform,
     scenario: async (name, fn) => flows.push({ name, fn }),
   });
-  assert.equal(flows.length, scenarioCount);
-  assert.equal(new Set(flows.map(({ name }) => name)).size, scenarioCount);
+  assert.equal(flows.length, report.plannedScenarios);
+  assert.equal(
+    new Set(flows.map(({ name }) => name)).size,
+    report.plannedScenarios,
+  );
   // Run device-boundary cases first to expose native failures before repeating
-  // the longer account sequence. Every passing run still requires all 19 cases.
+  // the longer account sequence. Every passing run requires the full catalog.
   const deviceCases = new Set([
     "document-picker-cancel",
     "document-upload-native-picker",
@@ -844,7 +849,10 @@ try {
     "microphone-permission-denial",
   ]);
   flows.sort(
-    (a, b) => Number(deviceCases.has(b.name)) - Number(deviceCases.has(a.name)),
+    (a, b) =>
+      Number(b.name.startsWith("android-")) -
+        Number(a.name.startsWith("android-")) ||
+      Number(deviceCases.has(b.name)) - Number(deviceCases.has(a.name)),
   );
   for (const flow of flows) await scenario(flow.name, flow.fn);
 } catch (error) {
@@ -910,7 +918,7 @@ try {
   report.status =
     !report.error &&
     report.cleanup &&
-    report.results.length === scenarioCount &&
+    report.results.length === report.plannedScenarios &&
     report.results.every((r) => r.status === "passed" && r.cleanup)
       ? "passed"
       : "failed";

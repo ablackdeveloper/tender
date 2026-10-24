@@ -1,0 +1,63 @@
+{
+  "$schema": "https://expo.dev/eas-json.schema.json",
+  "cli": {
+    "appVersionSource": "remote"
+  },
+  "build": {
+    "base": {
+      "corepack": true,
+      "node": "22.23.1",
+      "pnpm": "11.19.0"
+    },
+    "development": {
+      "extends": "base",
+      "developmentClient": true,
+      "distribution": "internal",
+      "environment": "development",
+      "env": {
+        "TENDER_APP_ENV": "development",
+        "EXPO_PUBLIC_AUTH_APPLE_ENABLED": "false",
+        "EXPO_PUBLIC_AUTH_GOOGLE_ENABLED": "false",
+        "EXPO_PUBLIC_HEALTH_DATA_ENABLED": "false",
+        "EXPO_PUBLIC_REVIEWED_CONTENT_ENABLED": "false",
+        "EXPO_PUBLIC_VOICE_TRANSCRIPTION_ENABLED": "false"
+      }
+    },
+    "preview": {
+      "extends": "base",
+      "distribution": "internal",
+      "environment": "preview",
+      "env": {
+        "TENDER_APP_ENV": "staging",
+        "EXPO_PUBLIC_AUTH_APPLE_ENABLED": "false",
+        "EXPO_PUBLIC_AUTH_GOOGLE_ENABLED": "false",
+        "EXPO_PUBLIC_HEALTH_DATA_ENABLED": "false",
+        "EXPO_PUBLIC_REVIEWED_CONTENT_ENABLED": "false",
+        "EXPO_PUBLIC_VOICE_TRANSCRIPTION_ENABLED": "false"
+      }
+    },
+    "iphone-test": {
+      "extends": "preview",
+      "environment": "production",
+      "ios": {
+        "image": "sdk-57"
+      }
+    },
+    "production": {
+      "extends": "base",
+      "autoIncrement": true,
+      "environment": "production",
+      "env": {
+        "TENDER_APP_ENV": "production",
+        "EXPO_PUBLIC_AUTH_APPLE_ENABLED": "false",
+        "EXPO_PUBLIC_AUTH_GOOGLE_ENABLED": "false",
+        "EXPO_PUBLIC_HEALTH_DATA_ENABLED": "false",
+        "EXPO_PUBLIC_REVIEWED_CONTENT_ENABLED": "false",
+        "EXPO_PUBLIC_VOICE_TRANSCRIPTION_ENABLED": "false"
+      },
+      "ios": {
+        "image": "sdk-57"
+      }
+    }
+  }
+}
