@@ -197,7 +197,7 @@ try {
       report.driverBuild.upstream,
       "c8c361be1cc89b2e742f185466a302a22778be6b",
     );
-    assert.equal(report.driverBuild.patch, "springboard-alert-hierarchy-v1");
+    assert.equal(report.driverBuild.patch, "springboard-alert-hierarchy-v2");
     assert.deepEqual(report.driverBuild.onlyTestIdentifiers, [
       "maestro_driver_iosUITests/testHttpServer",
     ]);
@@ -518,7 +518,17 @@ try {
           execute,
           log: path.join(output, `${stage}-url-${sequence}.log`),
         });
-        report.iosLinkDelivery = "simctl openurl; real OS URL routing";
+        // iOS can require confirmation even for simctl URL delivery. Accept
+        // only the visible Open control; the following destination assertion
+        // still has to pass. Later links can arrive without another prompt.
+        batch.push({
+          runFlow: {
+            when: { visible: "^Open$" },
+            commands: [{ tapOn: "^Open$" }],
+          },
+        });
+        report.iosLinkDelivery =
+          "simctl openurl; visible Open confirmation; destination UI required";
       }
       if (batch.length) await ui(batch);
       return;

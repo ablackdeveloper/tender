@@ -24,7 +24,7 @@ const source = path.join(root, "source");
 const report = {
   status: "failed",
   upstream,
-  patch: "springboard-alert-hierarchy-v1",
+  patch: "springboard-alert-hierarchy-v2",
   cleanup: false,
 };
 const run = (file, args, options = {}) =>
@@ -73,10 +73,18 @@ try {
     handler,
     original.replace(
       anchor,
-      `        if foregroundApp.bundleID != "com.apple.springboard",
-           let systemAlert = fullScreenAlertHierarchy(springboardApplication) {
-            NSLog("Tender harness: exposing SpringBoard alert")
-            return systemAlert
+      `        if foregroundApp.bundleID != "com.apple.springboard" {
+            if let systemAlert = fullScreenAlertHierarchy(springboardApplication) {
+                NSLog("Tender harness: exposing SpringBoard alert")
+                return systemAlert
+            }
+            // iOS 26 URL confirmation can be a system sheet rather than an
+            // XCUIElementTypeAlert. Expose its real tree, without accepting it.
+            if springboardApplication.buttons["Open"].exists &&
+               springboardApplication.buttons["Cancel"].exists {
+                NSLog("Tender harness: exposing SpringBoard URL confirmation")
+                return try elementHierarchy(xcuiElement: springboardApplication)
+            }
         }
 ${anchor}`,
     ),

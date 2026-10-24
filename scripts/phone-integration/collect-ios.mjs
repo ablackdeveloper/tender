@@ -99,7 +99,7 @@ for (let index = 0; index < count; index++) {
     verifyDriverCleanup(report.nativeStartupDriverSession);
     assert.equal(report.driverBuild?.status, "passed");
     assert.equal(report.driverBuild?.cleanup, true);
-    assert.equal(report.driverBuild?.patch, "springboard-alert-hierarchy-v1");
+    assert.equal(report.driverBuild?.patch, "springboard-alert-hierarchy-v2");
     assert.deepEqual(report.driverBuild?.onlyTestIdentifiers, [
       "maestro_driver_iosUITests/testHttpServer",
     ]);
