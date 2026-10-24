@@ -17,6 +17,7 @@ import { reservePort } from "../run-native-postgres-integration.mjs";
 import { getFlowPlan, scenarioCount } from "./flow-plan.mjs";
 import { androidScenarioCount } from "./android-user-flows.mjs";
 import { createIosDevice } from "./ios-device.mjs";
+import { createIosMaestroSession } from "./ios-maestro-session.mjs";
 import { saveMaestroDiagnostics } from "./maestro-diagnostics.mjs";
 
 const appId = "com.tender.companion.e2e";
@@ -64,6 +65,12 @@ let stack,
   installed = false;
 let stage = "preflight";
 let flows;
+let iosSession;
+async function closeIosSession() {
+  const owned = iosSession;
+  iosSession = undefined;
+  if (owned) await owned.close();
+}
 const secrets = new Set();
 const redact = (value) => {
   let text = value;
@@ -573,30 +580,43 @@ try {
       { mode: 0o600 },
     );
     try {
-      await execute(
-        maestro,
-        [
-          "--device",
+      if (iosDevice) {
+        iosSession ??= await createIosMaestroSession({
+          maestro,
           serial,
-          "test",
-          "--debug-output",
-          path.join(stack.root, `maestro-debug-${sequence}`),
-          "--test-output-dir",
-          path.join(stack.root, `maestro-${sequence}`),
+          root: stack.root,
+          output,
+          label: stage,
+          redact,
+        });
+        await iosSession.run(
           file,
-        ],
-        {
-          log: path.join(stack.root, `maestro-${sequence}.log`),
-          // XCTest has its own five-minute startup deadline. Leave time for
-          // CLI setup and this command batch; UI assertions still use 30s.
-          timeout: iosDevice ? 600000 : 120000,
-        },
-      );
+          path.join(stack.root, `maestro-${sequence}.log`),
+        );
+      } else
+        await execute(
+          maestro,
+          [
+            "--device",
+            serial,
+            "test",
+            "--debug-output",
+            path.join(stack.root, `maestro-debug-${sequence}`),
+            "--test-output-dir",
+            path.join(stack.root, `maestro-${sequence}`),
+            file,
+          ],
+          {
+            log: path.join(stack.root, `maestro-${sequence}.log`),
+            timeout: 120000,
+          },
+        );
       console.log(`Native ${stage} step ${sequence}: complete`);
     } catch (error) {
-      const diagnostic = redact(
-        readFileSync(path.join(stack.root, `maestro-${sequence}.log`), "utf8"),
-      );
+      const sourceLog = path.join(stack.root, `maestro-${sequence}.log`);
+      if (!existsSync(sourceLog))
+        writeFileSync(sourceLog, redact(error.message));
+      const diagnostic = redact(readFileSync(sourceLog, "utf8"));
       writeFileSync(path.join(output, `${stage}-maestro.log`), diagnostic);
       // Driver logs distinguish a failed assertion from a stalled app launch.
       // Copy text only, redact before truncating, and keep raw debug data private.
@@ -772,6 +792,7 @@ try {
       result.status = "passed";
     } catch (error) {
       result.failure = redact(error.message);
+      if (error.cleanupFailed) result.driverCleanupFailed = true;
       console.error(`Native ${name}: ${result.failure}`);
       if (iosDevice) saveIosDiagnostics();
       else saveAndroidCrash();
@@ -809,6 +830,17 @@ try {
           console.error(`Native ${name} cleanup failed: ${phase}`);
         }
       };
+      if (iosDevice) {
+        result.driverSession = iosSession?.receipt ?? null;
+        await verifyCleanup("owned XCTest session", async () => {
+          await closeIosSession();
+          assert.notEqual(
+            result.driverCleanupFailed,
+            true,
+            "Driver setup cleanup failed",
+          );
+        });
+      }
       await verifyCleanup("device state", async () => {
         // A failed flow can leave a SpringBoard alert over an uninstalled app.
         // Reboot the owned simulator before reset so it cannot block the helper.
@@ -908,44 +940,26 @@ try {
   }
   stage = "native-startup";
   console.log(stage);
-  for (let attempt = 1; attempt <= 2; attempt++) {
-    report.nativeStartupAttempts = attempt;
-    try {
-      await ui([
-        { launchApp: { clearState: !iosDevice } },
-        {
-          extendedWaitUntil: {
-            visible: "Welcome to Flutterings",
-            timeout: 30000,
-          },
+  report.nativeStartupAttempts = 1;
+  try {
+    await ui([
+      { launchApp: { clearState: !iosDevice } },
+      {
+        extendedWaitUntil: {
+          visible: "Welcome to Flutterings",
+          timeout: 30000,
         },
-      ]);
-      break;
-    } catch (error) {
-      const diagnosticPath = path.join(output, "native-startup-maestro.log");
-      const diagnostic = existsSync(diagnosticPath)
-        ? readFileSync(diagnosticPath, "utf8")
-        : "";
-      if (
-        !iosDevice ||
-        attempt !== 1 ||
-        !diagnostic.includes("IOSDriverTimeoutException") ||
-        diagnostic.includes(" > Flow")
-      )
+      },
+    ]);
+  } finally {
+    if (iosDevice) {
+      report.nativeStartupDriverSession = iosSession?.receipt ?? null;
+      try {
+        await closeIosSession();
+      } catch (error) {
+        error.cleanupFailed = true;
         throw error;
-      // CI observed XCTest failing to load Accessibility after the app build.
-      // Recover once before any account/case exists, only if no UI command ran.
-      // An app assertion failure or a failure inside a case is never retried.
-      report.nativeStartupRecovery =
-        "Driver startup failed before UI commands; owned simulator rebooted once";
-      iosDevice.shutdown();
-      await iosDevice.boot({
-        report,
-        execute,
-        output,
-        label: "native-startup-recovery",
-      });
-      clear();
+      }
     }
   }
   for (const flow of flows) await scenario(flow.name, flow.fn);
@@ -982,8 +996,10 @@ try {
       console.error(`Native cleanup failed: ${phase}`);
     }
   };
-  if (iosDevice) await cleanup("owned iOS simulator", () => iosDevice.close());
-  else {
+  if (iosDevice) {
+    await cleanup("owned XCTest session", closeIosSession);
+    await cleanup("owned iOS simulator", () => iosDevice.close());
+  } else {
     if (installed)
       await cleanup("isolated Android app", () => {
         adb("shell", "pm", "clear", appId);

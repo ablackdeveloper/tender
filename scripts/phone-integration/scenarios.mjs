@@ -15,11 +15,6 @@ const scrollTo = (element, direction = "DOWN") => ({
     centerElement: true,
   },
 });
-const field = (label, text) => [
-  { tapOn: { id: `field-${label}` } },
-  label.includes("password") ? { inputSecret: text } : { inputText: text },
-  { hideKeyboard: {} },
-];
 const link = (url) => ({ openLink: { link: url, autoVerify: true } });
 const privacy = [link("tender://privacy-data"), visible("Privacy and data")];
 async function login(ctx, type = "magiclink", destination = "Today") {
@@ -80,6 +75,28 @@ async function readMail(ctx) {
   throw new Error("Disposable mailbox did not receive the requested email");
 }
 export async function runFlows({ scenario, platform = "android" }) {
+  const dismissKeyboard = (label) => {
+    if (platform !== "ios") return { hideKeyboard: {} };
+    const labels = {
+      "email-address": "Email address",
+      "one-time-code": "One-time code",
+      "new-password": "New password",
+      "confirm-password": "Confirm password",
+      confirmation: "Confirmation",
+      "document-title": "Document title",
+    };
+    assert.ok(labels[label], "Missing native field label");
+    // The iOS email/numeric keyboards have no reliable dismissal button.
+    // Tap the real non-interactive label above the input, as a user can.
+    return {
+      tapOn: { text: `^${labels[label]}$`, above: { id: `field-${label}` } },
+    };
+  };
+  const field = (label, text) => [
+    { tapOn: { id: `field-${label}` } },
+    label.includes("password") ? { inputSecret: text } : { inputText: text },
+    dismissKeyboard(label),
+  ];
   if (platform === "android") await runAndroidFlows({ scenario, login });
   await scenario("first-use-onboarding", async (c) => {
     const user = await c.fresh({ complete: false });
@@ -252,7 +269,7 @@ export async function runFlows({ scenario, platform = "android" }) {
       { tapOn: { id: "field-new-password" } },
       { eraseText: 100 },
       { inputSecret: `Aa1!${randomBytes(12).toString("hex")}` },
-      { hideKeyboard: {} },
+      dismissKeyboard("new-password"),
       tap("Update password"),
       visible("Passwords do not match."),
     ]);

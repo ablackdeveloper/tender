@@ -13,7 +13,7 @@ import {
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { command as nativeCommand } from "./stack.mjs";
-import { saveMaestroDiagnostics } from "./maestro-diagnostics.mjs";
+import { createIosMaestroSession } from "./ios-maestro-session.mjs";
 
 // simctl can keep waiting after SIGTERM during a cold boot. Every synchronous
 // command here belongs to this adapter and must honor its configured deadline.
@@ -141,18 +141,17 @@ export function createIosDevice({ runId, appId }) {
     shutdown() {
       sim("shutdown", serial);
     },
-    async checkDriver({ maestro, execute, output, report, redact }) {
+    async checkDriver({ maestro, output, report, redact }) {
       // Readiness only: a new simulator has no test accounts or app data yet.
       // This must not count as one of the 19 production-app user flows.
       const root = mkdtempSync(path.join(tmpdir(), "tender-ios-driver-"));
-      const debug = path.join(root, "debug");
-      const results = path.join(root, "results");
       const flow = path.join(root, "readiness.yaml");
       const started = Date.now();
+      let session;
       report.driverReadiness = {
         status: "running",
         cleanup: false,
-        setupTimeoutMs: 720000,
+        setupTimeoutMs: 600000,
       };
       writeFileSync(
         flow,
@@ -160,25 +159,37 @@ export function createIosDevice({ runId, appId }) {
       );
       console.log("iOS driver readiness: launch Settings on owned simulator");
       try {
-        await execute(
+        session = await createIosMaestroSession({
           maestro,
-          [
-            "--device",
-            serial,
-            "test",
-            "--debug-output",
-            debug,
-            "--test-output-dir",
-            results,
-            flow,
-          ],
-          {
-            log: path.join(output, "driver-readiness.log"),
-            // Cold CLI/device discovery took over five minutes before XCTest
-            // started. Keep its setup budget separate from the 30s UI check.
-            timeout: 720000,
-          },
+          serial,
+          root,
+          output,
+          label: "driver-readiness",
+          redact,
+        });
+        report.driverReadiness.driverSession = session.receipt;
+        await session.run(flow, path.join(output, "driver-readiness.log"));
+        // Exercise error propagation against the real Settings UI, then prove
+        // that the same session can execute another command group. No mock or
+        // unit test can establish this native driver behavior.
+        const absent = `tender-missing-${randomUUID()}`;
+        const negative = path.join(root, "missing-element.yaml");
+        const negativeLog = path.join(output, "driver-negative-assertion.log");
+        writeFileSync(
+          negative,
+          `appId: com.apple.Preferences\n---\n- extendedWaitUntil:\n    visible: ${absent}\n    timeout: 1000\n`,
         );
+        await assert.rejects(
+          () => session.run(negative, negativeLog),
+          (error) => error.uiFailure === true,
+        );
+        assert.ok(
+          readFileSync(negativeLog, "utf8").includes(absent),
+          "Expected the deliberate missing-element failure",
+        );
+        await session.run(flow, path.join(output, "driver-reuse.log"));
+        report.driverReadiness.failurePropagation = true;
+        report.driverReadiness.sessionReuse = true;
         report.driverReadiness.status = "passed";
         console.log("iOS driver readiness: passed (not a user-flow case)");
       } catch (error) {
@@ -186,18 +197,17 @@ export function createIosDevice({ runId, appId }) {
         throw error;
       } finally {
         try {
-          saveMaestroDiagnostics({
-            roots: [debug, results],
-            output,
-            prefix: "driver-readiness",
-            redact,
-          });
+          if (session) await session.close();
+        } catch (error) {
+          report.driverReadiness.status = "failed";
+          error.cleanupFailed = true;
+          throw error;
         } finally {
           assert.equal(path.dirname(root), path.resolve(tmpdir()));
           assert.ok(path.basename(root).startsWith("tender-ios-driver-"));
           rmSync(root, { recursive: true, force: true });
           assert.ok(!existsSync(root));
-          report.driverReadiness.cleanup = true;
+          report.driverReadiness.cleanup = session?.receipt.cleanup === true;
           report.driverReadiness.elapsedMs = Date.now() - started;
           if (
             report.driverReadiness.status === "passed" &&

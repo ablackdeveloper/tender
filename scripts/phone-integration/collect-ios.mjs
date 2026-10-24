@@ -19,6 +19,7 @@ const result = {
 };
 const seen = [];
 const runIds = new Set();
+const driverSessionIds = new Set();
 for (let index = 0; index < count; index++) {
   try {
     const root = path.join(
@@ -44,12 +45,15 @@ for (let index = 0; index < count; index++) {
       vmCleanup: vm.cleanup,
       driverReadiness: report.driverReadiness,
       driverBuild: report.driverBuild,
-      results: report.results.map(({ name, status, cleanup, mailCleanup }) => ({
-        name,
-        status,
-        cleanup,
-        mailCleanup,
-      })),
+      results: report.results.map(
+        ({ name, status, cleanup, mailCleanup, driverSession }) => ({
+          name,
+          status,
+          cleanup,
+          mailCleanup,
+          driverSession,
+        }),
+      ),
     });
     seen.push(...report.results.map(({ name }) => name));
     assert.ok(!runIds.has(report.runId), "Shard run IDs must be unique");
@@ -76,6 +80,10 @@ for (let index = 0; index < count; index++) {
     );
     assert.equal(report.driverReadiness?.status, "passed");
     assert.equal(report.driverReadiness?.cleanup, true);
+    assert.equal(report.driverReadiness?.failurePropagation, true);
+    assert.equal(report.driverReadiness?.sessionReuse, true);
+    assert.equal(report.driverReadiness?.driverSession?.cleanup, true);
+    assert.equal(report.nativeStartupDriverSession?.cleanup, true);
     assert.equal(report.driverBuild?.status, "passed");
     assert.equal(report.driverBuild?.cleanup, true);
     assert.equal(report.driverBuild?.patch, "springboard-alert-hierarchy-v1");
@@ -85,6 +93,14 @@ for (let index = 0; index < count; index++) {
     assert.equal(report.cleanup, true, "Harness cleanup failed");
     assert.equal(vm.cleanup, true, "VM cleanup failed");
     for (const test of report.results) {
+      assert.equal(test.driverSession?.kind, "maestro-mcp-per-case");
+      assert.equal(test.driverSession.cleanup, true);
+      assert.ok(test.driverSession.batches > 0);
+      assert.ok(
+        !driverSessionIds.has(test.driverSession.id),
+        "Cases must not share a driver session",
+      );
+      driverSessionIds.add(test.driverSession.id);
       assert.equal(test.cleanup, true, `Case cleanup failed: ${test.name}`);
       assert.equal(
         test.mailCleanup,
@@ -121,7 +137,9 @@ result.cleanup =
       s.vmCleanup &&
       s.driverReadiness?.cleanup &&
       s.driverBuild?.cleanup &&
-      s.results.every((r) => r.cleanup && r.mailCleanup),
+      s.results.every(
+        (r) => r.cleanup && r.mailCleanup && r.driverSession?.cleanup,
+      ),
   );
 if (result.issues.length === 0 && result.cleanup) result.status = "passed";
 mkdirSync(output, { recursive: true });
