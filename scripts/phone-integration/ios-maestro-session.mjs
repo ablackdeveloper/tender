@@ -180,7 +180,17 @@ export async function createIosMaestroSession({
     } finally {
       clearTimeout(timer);
     }
-    if (!stopped) {
+    const groupAlive = () => {
+      if (!child.pid) return false;
+      try {
+        process.kill(-child.pid, 0);
+        return true;
+      } catch (error) {
+        if (error.code === "ESRCH") return false;
+        throw error;
+      }
+    };
+    if (groupAlive()) {
       try {
         process.kill(-child.pid, "SIGKILL");
       } catch (error) {
@@ -196,6 +206,14 @@ export async function createIosMaestroSession({
     }
     try {
       assert.ok(stopped, "Owned Maestro process did not exit");
+      const deadline = Date.now() + 10000;
+      while (groupAlive() && Date.now() < deadline)
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      assert.equal(
+        groupAlive(),
+        false,
+        "Owned Maestro child processes survived cleanup",
+      );
       assert.equal(
         await driverListening(),
         false,

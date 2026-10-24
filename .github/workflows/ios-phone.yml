@@ -79,12 +79,26 @@ jobs:
           pnpm test:flows:phone
       - name: Stop owned Docker environment
         if: always() && env.TENDER_COLIMA_OWNED == '1'
+        timeout-minutes: 10
         run: |
+          test "$COLIMA_PROFILE" = "tender-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-$TENDER_NATIVE_SHARD_INDEX"
+          owned_lima="colima-$COLIMA_PROFILE"
+          owned_lima_home="$HOME/.colima/_lima"
           if command -v colima >/dev/null && test -d "$HOME/.colima/$COLIMA_PROFILE"; then
-            colima delete --profile "$COLIMA_PROFILE" --data --force
+            if ! colima delete --profile "$COLIMA_PROFILE" --data --force; then
+              echo "Colima deletion incomplete; checking only the owned Lima instance and disk"
+            fi
           fi
-          test ! -e "$HOME/.colima/_lima/_disks/colima-$COLIMA_PROFILE/datadisk"
-          test ! -d "$HOME/.colima/_lima/colima-$COLIMA_PROFILE"
+          # Failed first boot can leave a data disk even after Colima deletes
+          # the VM. Use Lima's API and the exact preflight-absent run identity.
+          if test -d "$owned_lima_home/$owned_lima"; then
+            env LIMA_HOME="$owned_lima_home" limactl delete --force "$owned_lima"
+          fi
+          test ! -d "$owned_lima_home/$owned_lima"
+          if test -d "$owned_lima_home/_disks/$owned_lima"; then
+            env LIMA_HOME="$owned_lima_home" limactl disk delete "$owned_lima"
+          fi
+          test ! -e "$owned_lima_home/_disks/$owned_lima"
           node -e 'const fs = require("node:fs"); const root = "scripts/feature-integration/artifacts/native-phone-runs"; fs.mkdirSync(root, {recursive:true}); fs.writeFileSync(root + "/vm-cleanup.json", JSON.stringify({cleanup:true,sourceCommit:process.env.GITHUB_SHA,ciRunId:process.env.GITHUB_RUN_ID,ciRunAttempt:process.env.GITHUB_RUN_ATTEMPT,shardIndex:Number(process.env.TENDER_NATIVE_SHARD_INDEX)}));'
       - uses: actions/upload-artifact@v4
         if: always()
