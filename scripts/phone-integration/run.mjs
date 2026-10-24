@@ -523,7 +523,10 @@ try {
     for (const entry of commands) {
       if (entry.tapOn?.id?.includes("password"))
         focusedPasswordField = entry.tapOn.id;
-      if (entry.launchApp) entry.launchApp.permissions ??= { all: "unset" };
+      // iOS clear() already resets permissions before each fresh case. Avoid
+      // applesimutils work on every launch, and preserve grants on restarts.
+      if (entry.launchApp)
+        entry.launchApp.permissions ??= iosDevice ? {} : { all: "unset" };
       if (typeof entry.inputText === "string") secrets.add(entry.inputText);
       if (entry.openLink?.link) {
         secrets.add(entry.openLink.link);

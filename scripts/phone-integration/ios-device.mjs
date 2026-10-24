@@ -147,10 +147,15 @@ export function createIosDevice({ runId, appId }) {
       const debug = path.join(root, "debug");
       const results = path.join(root, "results");
       const flow = path.join(root, "readiness.yaml");
-      report.driverReadiness = { status: "running", cleanup: false };
+      const started = Date.now();
+      report.driverReadiness = {
+        status: "running",
+        cleanup: false,
+        setupTimeoutMs: 720000,
+      };
       writeFileSync(
         flow,
-        'appId: com.apple.Preferences\n---\n- launchApp\n- extendedWaitUntil:\n    visible: "Settings"\n    timeout: 30000\n',
+        'appId: com.apple.Preferences\n---\n- launchApp:\n    permissions: {}\n- extendedWaitUntil:\n    visible: "Settings"\n    timeout: 30000\n',
       );
       console.log("iOS driver readiness: launch Settings on owned simulator");
       try {
@@ -168,7 +173,9 @@ export function createIosDevice({ runId, appId }) {
           ],
           {
             log: path.join(output, "driver-readiness.log"),
-            timeout: 480000,
+            // Cold CLI/device discovery took over five minutes before XCTest
+            // started. Keep its setup budget separate from the 30s UI check.
+            timeout: 720000,
           },
         );
         report.driverReadiness.status = "passed";
@@ -190,6 +197,14 @@ export function createIosDevice({ runId, appId }) {
           rmSync(root, { recursive: true, force: true });
           assert.ok(!existsSync(root));
           report.driverReadiness.cleanup = true;
+          report.driverReadiness.elapsedMs = Date.now() - started;
+          if (
+            report.driverReadiness.status === "passed" &&
+            process.env.GITHUB_ACTIONS === "true"
+          )
+            console.log(
+              "::notice title=iOS XCTest readiness::Settings UI passed; readiness files removed",
+            );
         }
       }
     },
@@ -275,6 +290,10 @@ export function createIosDevice({ runId, appId }) {
         timeout: 30000,
       });
       report.simulatorSigning = "ad-hoc; signature verified";
+      if (process.env.GITHUB_ACTIONS === "true")
+        console.log(
+          "::notice title=iOS app build::Isolated simulator app compiled; ad-hoc signature verified",
+        );
       report.appExecutableSha256 = createHash("sha256")
         .update(readFileSync(path.join(appBundle, plist.CFBundleExecutable)))
         .digest("hex");
