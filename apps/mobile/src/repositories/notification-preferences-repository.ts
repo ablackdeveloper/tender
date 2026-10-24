@@ -52,9 +52,8 @@ function map(row: Row): NotificationPreferences {
     photo: row.photo_enabled,
     partnerRequest: row.partner_request_enabled,
     revealingContent: row.revealing_content_enabled,
-    // PostgreSQL time values include seconds; the quiet-hours form uses HH:MM.
-    quietHoursStart: row.quiet_hours_start?.slice(0, 5) ?? null,
-    quietHoursEnd: row.quiet_hours_end?.slice(0, 5) ?? null,
+    quietHoursStart: row.quiet_hours_start,
+    quietHoursEnd: row.quiet_hours_end,
     timezone: row.timezone,
   };
 }

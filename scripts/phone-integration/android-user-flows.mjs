@@ -311,9 +311,11 @@ export async function runAndroidFlows({ scenario, login }) {
     assert.equal(saved.revealing_content_enabled, false);
     await reopen(c, "notification-settings", "Notifications");
     await c.ui([
-      scroll("21:30"),
-      visible("21:30"),
-      visible("08:00"),
+      scroll({ id: id("Start (24-hour HH:MM)") }),
+      {
+        assertVisible: { id: id("Start (24-hour HH:MM)"), text: "21:30(:00)?" },
+      },
+      { assertVisible: { id: id("End (24-hour HH:MM)"), text: "08:00(:00)?" } },
       scroll("Save choices"),
       tap("Save choices"),
       scroll("Notification choices saved.", "UP"),
