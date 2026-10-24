@@ -84,7 +84,15 @@ Still separate from emulator evidence: physical camera/microphone quality, inter
 
 The combined local report is `../feature-integration/artifacts/android-completion/40064846252/android-complete-evidence/complete.json`. Its sibling group folders contain the individual reports and APK hashes. `source-parity.json` records that 270 tracked app, package, backend, and lock files plus the Android harness entry points matched the tested snapshot. The final change is in the test harness and CI; production app source is unchanged. This report does not prove the EAS binary, hosted backend, or physical-device behavior. No EAS build was started.
 
-One separate visual finding remains: emulator failure screenshots from run `40059804541` show placeholder boxes for the bottom tab icons while the text labels remain readable. The 30-case functional pass does not establish visual acceptance. The app source was unchanged between that run and the passing run.
+Emulator screenshots from run `40059804541` showed placeholder boxes for the bottom tab icons while the text labels remained readable. The follow-up below resolves that visual finding; the earlier functional pass alone did not establish visual acceptance.
+
+### Android tab icons: 24 October 2026
+
+The four visible navigation tabs had no `tabBarIcon` definitions. They now use local SVG sun, book, heart, and people shapes in `apps/mobile/src/components/ui/tab-icon.tsx`, with the navigator's size, active/inactive colour, and selected state. The SVG package is pinned to the [Expo SDK 57 recommended version](https://docs.expo.dev/versions/v57.0.0/sdk/svg/), `15.15.4`. The parent tab retains its accessible label and selected state; decorative SVG children do not add duplicate screen-reader labels. The existing Add button and menu remain in place.
+
+[CI run 40094311172](https://github.com/ablackdeveloper/tender/actions/runs/40094311172) passed all 30 Android E2E cases at source commit `e818f982b8d2dc8e4ec0a963e6759eda385d89ca`. All per-case account/file/inbox cleanup and all three final cleanup checks passed. The navigation case taps each real tab and opens/closes Add in light and dark mode. The complete CI check also requires all ten screenshot files. The workflow took about 46 minutes. TypeScript, scoped ESLint, harness syntax, and whitespace checks passed; no unit tests were run.
+
+All ten native Android 14 screenshots were visually inspected. The four tab icons render without placeholder boxes, active colour follows the selected tab, and icons/labels fit without clipping in both colour modes. Add opens its action sheet in both modes. Evidence is in `../feature-integration/artifacts/android-icons/40094311172/`: `android-complete-evidence/complete.json`, `visual-review.json`, `source-parity.json`, and the three group report folders. Screenshots are in `native-phone-evidence-1/79bfa5b7-6ee6-4b07-81b6-3bd1ddf54bf9/`. Source parity covered 271 tracked app/package/backend/lock files plus the Android harness entry points. This verifies the default-size Android emulator UI; it does not establish physical-device, full accessibility, iOS, hosted-backend, or final EAS binary acceptance. No EAS build was started.
 
 ## iOS simulator and physical phones
 
