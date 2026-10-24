@@ -428,6 +428,15 @@ import Darwin
         );
       }
     },
+    async openLink(url, { execute, log }) {
+      assert.equal(new URL(url).protocol, "tender:");
+      // Exercise the real OS URL dispatcher. Keep the local HTTPS proxy free
+      // to serve the callback while iOS brings the test app to the foreground.
+      await execute("xcrun", ["simctl", "openurl", serial, url], {
+        log,
+        timeout: 30000,
+      });
+    },
     fixture(extension, bytes) {
       assert.ok(["pdf", "png"].includes(extension));
       const container = sim(

@@ -426,6 +426,23 @@ try {
     adb("shell", "am", "force-stop", "com.google.android.apps.nexuslauncher");
   let sequence = 0;
   let focusedPasswordField;
+  const rememberLink = (link) => {
+    secrets.add(link);
+    const url = new URL(link);
+    for (const params of [
+      url.searchParams,
+      new URLSearchParams(url.hash.slice(1)),
+    ])
+      for (const key of [
+        "access_token",
+        "refresh_token",
+        "token_hash",
+        "code",
+      ]) {
+        const value = params.get(key);
+        if (value) secrets.add(value);
+      }
+  };
   async function ui(commands) {
     if (!iosDevice && commands.some((entry) => entry.launchApp)) {
       let batch = [];
@@ -479,6 +496,26 @@ try {
       if (batch.length) await ui(batch);
       return;
     }
+    if (iosDevice && commands.some((entry) => entry.openLink)) {
+      let batch = [];
+      for (const entry of commands) {
+        if (!entry.openLink) {
+          batch.push(entry);
+          continue;
+        }
+        if (batch.length) await ui(batch);
+        batch = [];
+        rememberLink(entry.openLink.link);
+        console.log(`Native ${stage} step ${++sequence}: native URL delivery`);
+        await iosDevice.openLink(entry.openLink.link, {
+          execute,
+          log: path.join(output, `${stage}-url-${sequence}.log`),
+        });
+        report.iosLinkDelivery = "simctl openurl; real OS URL routing";
+      }
+      if (batch.length) await ui(batch);
+      return;
+    }
     // Passwords go through Android's input service without entering a Maestro
     // file or driver log. The app still receives normal native keyboard input.
     if (commands.some((entry) => entry.inputSecret !== undefined)) {
@@ -516,28 +553,6 @@ try {
       if (batch.length) await ui(batch);
       return;
     }
-    // autoVerify is Android-only. Accept only the native prompt for this app.
-    if (iosDevice) {
-      const prompt = "(?s)Open in .*Flutterings\\s+Isolated Tests.*";
-      commands = commands.flatMap((entry) =>
-        entry.openLink
-          ? [
-              entry,
-              {
-                runFlow: {
-                  when: { visible: prompt },
-                  commands: [
-                    { tapOn: { text: "^Open$" } },
-                    {
-                      extendedWaitUntil: { notVisible: prompt, timeout: 10000 },
-                    },
-                  ],
-                },
-              },
-            ]
-          : [entry],
-      );
-    }
     for (const entry of commands) {
       if (entry.tapOn?.id?.includes("password"))
         focusedPasswordField = entry.tapOn.id;
@@ -546,23 +561,7 @@ try {
       if (entry.launchApp)
         entry.launchApp.permissions ??= iosDevice ? {} : { all: "unset" };
       if (typeof entry.inputText === "string") secrets.add(entry.inputText);
-      if (entry.openLink?.link) {
-        secrets.add(entry.openLink.link);
-        const url = new URL(entry.openLink.link);
-        for (const params of [
-          url.searchParams,
-          new URLSearchParams(url.hash.slice(1)),
-        ])
-          for (const key of [
-            "access_token",
-            "refresh_token",
-            "token_hash",
-            "code",
-          ]) {
-            const value = params.get(key);
-            if (value) secrets.add(value);
-          }
-      }
+      if (entry.openLink?.link) rememberLink(entry.openLink.link);
     }
     const file = path.join(stack.root, `flow-${++sequence}.yaml`);
     console.log(
