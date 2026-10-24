@@ -10,18 +10,27 @@ permissions:
   contents: read
 jobs:
   ios:
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
     runs-on: macos-26-intel
-    timeout-minutes: 120
+    timeout-minutes: 180
     env:
-      DEVELOPER_DIR: /Applications/Xcode_26.4.1.app/Contents/Developer
-      TENDER_IOS_VERSION: "26.4"
+      DEVELOPER_DIR: /Applications/Xcode_26.5.app/Contents/Developer
+      # 26.5 repeatedly failed inside XCTest Accessibility initialization,
+      # including with Simulator.app open. Exercise the same cases on the
+      # installed 26.2 runtime; never silently fall back to another version.
+      TENDER_IOS_VERSION: "26.2"
       TENDER_NATIVE_PLATFORM: ios
       TENDER_NATIVE_E2E: "1"
+      TENDER_NATIVE_SHARD_INDEX: ${{ matrix.shard }}
+      TENDER_NATIVE_SHARD_COUNT: "4"
       TENDER_TEST_PASSWORD_SOURCE: disposable-generated
       MAESTRO_CLI_NO_ANALYTICS: "1"
-      MAESTRO_DRIVER_STARTUP_TIMEOUT: "180000"
+      MAESTRO_DRIVER_STARTUP_TIMEOUT: "600000"
       HOMEBREW_NO_AUTO_UPDATE: "1"
-      COLIMA_PROFILE: tender-${{ github.run_id }}-${{ github.run_attempt }}
+      COLIMA_PROFILE: tender-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.shard }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       - name: Keep temporary backend files inside the VM mount
@@ -46,6 +55,11 @@ jobs:
           unzip -q "$RUNNER_TEMP/maestro.zip" -d "$RUNNER_TEMP"
           chmod +x "$RUNNER_TEMP/maestro/bin/maestro"
           echo "MAESTRO_BIN=$RUNNER_TEMP/maestro/bin/maestro" >> "$GITHUB_ENV"
+      - name: Build pinned XCTest driver with system alert visibility
+        timeout-minutes: 45
+        run: |
+          node scripts/phone-integration/prepare-ios-driver.mjs "$RUNNER_TEMP/maestro" "$GITHUB_WORKSPACE/scripts/feature-integration/artifacts/native-phone-runs/driver-build.json"
+          echo "TENDER_IOS_DRIVER_RECEIPT=$GITHUB_WORKSPACE/scripts/feature-integration/artifacts/native-phone-runs/driver-build.json" >> "$GITHUB_ENV"
       - name: Initialize the Xcode simulator service
         timeout-minutes: 5
         run: xcrun simctl list runtimes --json > "$RUNNER_TEMP/ios-runtimes.json"
@@ -68,16 +82,54 @@ jobs:
           pnpm test:flows:phone
       - name: Stop owned Docker environment
         if: always() && env.TENDER_COLIMA_OWNED == '1'
+        timeout-minutes: 10
         run: |
+          test "$COLIMA_PROFILE" = "tender-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-$TENDER_NATIVE_SHARD_INDEX"
+          owned_lima="colima-$COLIMA_PROFILE"
+          owned_lima_home="$HOME/.colima/_lima"
           if command -v colima >/dev/null && test -d "$HOME/.colima/$COLIMA_PROFILE"; then
-            colima delete --profile "$COLIMA_PROFILE" --data --force
+            if ! colima delete --profile "$COLIMA_PROFILE" --data --force; then
+              echo "Colima deletion incomplete; checking only the owned Lima instance and disk"
+            fi
           fi
-          test ! -e "$HOME/.colima/_lima/_disks/colima-$COLIMA_PROFILE/datadisk"
-          test ! -d "$HOME/.colima/_lima/colima-$COLIMA_PROFILE"
+          # Failed first boot can leave a data disk even after Colima deletes
+          # the VM. Use Lima's API and the exact preflight-absent run identity.
+          if test -d "$owned_lima_home/$owned_lima"; then
+            env LIMA_HOME="$owned_lima_home" limactl delete --force "$owned_lima"
+          fi
+          test ! -d "$owned_lima_home/$owned_lima"
+          if test -d "$owned_lima_home/_disks/$owned_lima"; then
+            env LIMA_HOME="$owned_lima_home" limactl disk delete "$owned_lima"
+          fi
+          test ! -e "$owned_lima_home/_disks/$owned_lima"
+          node -e 'const fs = require("node:fs"); const root = "scripts/feature-integration/artifacts/native-phone-runs"; fs.mkdirSync(root, {recursive:true}); fs.writeFileSync(root + "/vm-cleanup.json", JSON.stringify({cleanup:true,sourceCommit:process.env.GITHUB_SHA,ciRunId:process.env.GITHUB_RUN_ID,ciRunAttempt:process.env.GITHUB_RUN_ATTEMPT,shardIndex:Number(process.env.TENDER_NATIVE_SHARD_INDEX)}));'
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: ios-phone-evidence
+          name: ios-phone-evidence-${{ github.run_attempt }}-${{ matrix.shard }}
           path: scripts/feature-integration/artifacts/native-phone-runs/
-          if-no-files-found: warn
+          if-no-files-found: error
+          retention-days: 7
+  verify-ios-suite:
+    needs: ios
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version-file: .nvmrc
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: ios-phone-evidence-${{ github.run_attempt }}-*
+          path: scripts/feature-integration/artifacts/ios-shards
+      - name: Verify all 19 cases and cleanup
+        run: node scripts/phone-integration/collect-ios.mjs scripts/feature-integration/artifacts/ios-shards scripts/feature-integration/artifacts/ios-suite
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ios-suite-evidence-${{ github.run_attempt }}
+          path: scripts/feature-integration/artifacts/ios-suite
+          if-no-files-found: error
           retention-days: 7

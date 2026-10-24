@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import {
   mkdirSync,
@@ -12,7 +13,7 @@ import {
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { command as nativeCommand } from "./stack.mjs";
-import { saveMaestroDiagnostics } from "./maestro-diagnostics.mjs";
+import { createIosMaestroSession } from "./ios-maestro-session.mjs";
 
 // simctl can keep waiting after SIGTERM during a cold boot. Every synchronous
 // command here belongs to this adapter and must honor its configured deadline.
@@ -22,6 +23,7 @@ const command = (file, args, options = {}) =>
 // This adapter owns a simulator it creates itself. It never accepts a device UDID.
 export function createIosDevice({ runId, appId }) {
   let serial, appBundle, certificate, helperBundle, appExecutable;
+  let simulatorUi;
   let creationAttempted = false;
   const simulatorName = `Tender E2E ${runId}`;
   const helperId = "com.tender.fixtures.e2e";
@@ -51,6 +53,10 @@ export function createIosDevice({ runId, appId }) {
         "iOS E2E requires a Mac with Xcode",
       );
       report.xcodeVersion = command("xcodebuild", ["-version"]).trim();
+      const developer =
+        process.env.DEVELOPER_DIR ?? command("xcode-select", ["-p"]).trim();
+      simulatorUi = path.join(developer, "Applications/Simulator.app");
+      assert.ok(existsSync(simulatorUi), "Selected Xcode has no Simulator UI");
       const version = report.xcodeVersion.match(/^Xcode (\d+)\.(\d+)/);
       assert.ok(
         version &&
@@ -136,60 +142,106 @@ export function createIosDevice({ runId, appId }) {
           });
         }
       }
+      // Match Maestro's own LocalSimulatorUtils.launchSimulator setup. simctl
+      // boot alone does not open the Simulator UI host. Target only the device
+      // created by this harness; do not select or reset another simulator.
+      console.log(`iOS ${label}: open Simulator UI for owned device`);
+      await execute(
+        "open",
+        ["-a", simulatorUi, "--args", "-CurrentDeviceUDID", serial],
+        {
+          timeout: 60000,
+          log: path.join(output, `${label}-ui-host.log`),
+        },
+      );
+      report.simulatorUiHost = "Selected Xcode Simulator.app; owned device only";
     },
     shutdown() {
       sim("shutdown", serial);
     },
-    async checkDriver({ maestro, execute, output, report, redact }) {
+    async checkDriver({ maestro, output, report, redact }) {
       // Readiness only: a new simulator has no test accounts or app data yet.
       // This must not count as one of the 19 production-app user flows.
       const root = mkdtempSync(path.join(tmpdir(), "tender-ios-driver-"));
-      const debug = path.join(root, "debug");
-      const results = path.join(root, "results");
       const flow = path.join(root, "readiness.yaml");
-      report.driverReadiness = { status: "running", cleanup: false };
+      const started = Date.now();
+      let session, readinessError;
+      report.driverReadiness = {
+        status: "running",
+        cleanup: false,
+        setupTimeoutMs: 900000,
+      };
       writeFileSync(
         flow,
-        'appId: com.apple.Preferences\n---\n- launchApp\n- extendedWaitUntil:\n    visible: "Settings"\n    timeout: 30000\n',
+        'appId: com.apple.Preferences\n---\n- launchApp:\n    permissions: {}\n- extendedWaitUntil:\n    visible: "Settings"\n    timeout: 30000\n',
       );
       console.log("iOS driver readiness: launch Settings on owned simulator");
       try {
-        await execute(
+        session = await createIosMaestroSession({
           maestro,
-          [
-            "--device",
-            serial,
-            "test",
-            "--debug-output",
-            debug,
-            "--test-output-dir",
-            results,
-            flow,
-          ],
-          {
-            log: path.join(output, "driver-readiness.log"),
-            timeout: 480000,
-          },
+          serial,
+          root,
+          output,
+          label: "driver-readiness",
+          redact,
+        });
+        report.driverReadiness.driverSession = session.receipt;
+        await session.run(flow, path.join(output, "driver-readiness.log"));
+        // Exercise error propagation against the real Settings UI, then prove
+        // that the same session can execute another command group. No mock or
+        // unit test can establish this native driver behavior.
+        const absent = `tender-missing-${randomUUID()}`;
+        const negative = path.join(root, "missing-element.yaml");
+        const negativeLog = path.join(output, "driver-negative-assertion.log");
+        writeFileSync(
+          negative,
+          `appId: com.apple.Preferences\n---\n- extendedWaitUntil:\n    visible: ${absent}\n    timeout: 1000\n`,
         );
+        await assert.rejects(
+          () => session.run(negative, negativeLog),
+          (error) => error.uiFailure === true,
+        );
+        assert.ok(
+          readFileSync(negativeLog, "utf8").includes(absent),
+          "Expected the deliberate missing-element failure",
+        );
+        await session.run(flow, path.join(output, "driver-reuse.log"));
+        report.driverReadiness.failurePropagation = true;
+        report.driverReadiness.sessionReuse = true;
         report.driverReadiness.status = "passed";
         console.log("iOS driver readiness: passed (not a user-flow case)");
       } catch (error) {
+        readinessError = error;
         report.driverReadiness.status = "failed";
+        report.driverReadiness.failure = redact(error.message);
+        report.driverReadiness.driverSession ??= error.driverSession;
         throw error;
       } finally {
         try {
-          saveMaestroDiagnostics({
-            roots: [debug, results],
-            output,
-            prefix: "driver-readiness",
-            redact,
-          });
+          if (session) await session.close();
+        } catch (error) {
+          report.driverReadiness.status = "failed";
+          report.driverReadiness.cleanupFailure = redact(error.message);
+          if (readinessError) readinessError.cleanupFailed = true;
+          else {
+            error.cleanupFailed = true;
+            throw error;
+          }
         } finally {
           assert.equal(path.dirname(root), path.resolve(tmpdir()));
           assert.ok(path.basename(root).startsWith("tender-ios-driver-"));
           rmSync(root, { recursive: true, force: true });
           assert.ok(!existsSync(root));
-          report.driverReadiness.cleanup = true;
+          report.driverReadiness.cleanup =
+            report.driverReadiness.driverSession?.cleanup === true;
+          report.driverReadiness.elapsedMs = Date.now() - started;
+          if (
+            report.driverReadiness.status === "passed" &&
+            process.env.GITHUB_ACTIONS === "true"
+          )
+            console.log(
+              "::notice title=iOS XCTest readiness::Settings UI passed; readiness files removed",
+            );
         }
       }
     },
@@ -275,6 +327,10 @@ export function createIosDevice({ runId, appId }) {
         timeout: 30000,
       });
       report.simulatorSigning = "ad-hoc; signature verified";
+      if (process.env.GITHUB_ACTIONS === "true")
+        console.log(
+          "::notice title=iOS app build::Isolated simulator app compiled; ad-hoc signature verified",
+        );
       report.appExecutableSha256 = createHash("sha256")
         .update(readFileSync(path.join(appBundle, plist.CFBundleExecutable)))
         .digest("hex");
@@ -286,13 +342,36 @@ export function createIosDevice({ runId, appId }) {
       writeFileSync(
         source,
         `import UIKit
+import Foundation
+import Darwin
 @main class FixtureApp: UIResponder, UIApplicationDelegate {
   var window: UIWindow?
+  var handledClipboard = false
   func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
     window = UIWindow(frame: UIScreen.main.bounds)
     window?.rootViewController = UIViewController()
     window?.makeKeyAndVisible()
     return true
+  }
+  func applicationDidBecomeActive(_ application: UIApplication) {
+    guard !handledClipboard,
+      let mode = ProcessInfo.processInfo.environment["TENDER_E2E_CLIPBOARD_MODE"] else { return }
+    handledClipboard = true
+    let board = UIPasteboard.general
+    let ok: Bool
+    if mode == "clear" {
+      board.items = []
+      ok = board.items.isEmpty
+    } else if mode == "write",
+      let value = ProcessInfo.processInfo.environment["TENDER_E2E_CLIPBOARD_VALUE"], !value.isEmpty {
+      board.setItems([["public.utf8-plain-text": value]], options: [.localOnly: true, .expirationDate: Date().addingTimeInterval(600)])
+      ok = board.string == value
+    } else {
+      ok = false
+    }
+    // Only this fixed acknowledgement leaves the helper; never the value.
+    FileHandle.standardOutput.write(Data((ok ? "TENDER_CLIPBOARD_OK\\n" : "TENDER_CLIPBOARD_READBACK_FAILED\\n").utf8))
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { exit(ok ? 0 : 1) }
   }
 }
 `,
@@ -329,6 +408,14 @@ export function createIosDevice({ runId, appId }) {
         ],
         { log: path.join(output, "fixture-build.log") },
       );
+      await execute("codesign", ["--force", "--sign", "-", helperBundle], {
+        log: path.join(output, "fixture-signing.log"),
+        timeout: 30000,
+      });
+      await execute("codesign", ["--verify", "--strict", helperBundle], {
+        log: path.join(output, "fixture-signing-verification.log"),
+        timeout: 30000,
+      });
       // Resume the initialized simulator only after compilation finishes.
       await this.boot({ report, execute, output });
       this.clear();
@@ -345,13 +432,28 @@ export function createIosDevice({ runId, appId }) {
       );
       sim("keychain", serial, "reset");
       sim("keychain", serial, "add-root-cert", certificate);
-      console.log("iOS app reset: clear simulator clipboard");
-      this.copySecret("");
-      console.log("iOS app reset: install isolated apps");
-      for (const bundle of [appBundle, helperBundle])
-        sim("install", serial, bundle);
-      console.log("iOS app reset: reset permissions and verify empty app data");
+      for (const [label, bundle] of [
+        ["main app", appBundle],
+        ["fixture helper", helperBundle],
+      ]) {
+        console.log(`iOS app reset: install ${label}`);
+        try {
+          // Cold CoreSimulator installs exceeded the old two-minute command
+          // limit. This reset budget does not extend any UI assertion.
+          command("xcrun", ["simctl", "install", serial, bundle], {
+            timeout: 300000,
+          });
+        } catch (error) {
+          throw new Error(`iOS ${label} install: ${error.message}`);
+        }
+      }
+      // Complete OS permission changes before the clipboard helper enters and
+      // exits the foreground; no app process needs to run for this reset.
+      console.log("iOS app reset: reset permissions");
       sim("privacy", serial, "reset", "all", appId);
+      console.log("iOS app reset: clear and verify simulator clipboard");
+      this.copySecret("", { restoreApp: false });
+      console.log("iOS app reset: verify empty app data");
       assert.ok(installedApps()[appId]);
       const container = sim("get_app_container", serial, appId, "data").trim();
       for (const name of ["Documents", "Library/Caches"]) {
@@ -361,6 +463,15 @@ export function createIosDevice({ runId, appId }) {
           "App data survived reinstall",
         );
       }
+    },
+    async openLink(url, { execute, log }) {
+      assert.equal(new URL(url).protocol, "tender:");
+      // Exercise the real OS URL dispatcher. Keep the local HTTPS proxy free
+      // to serve the callback while iOS brings the test app to the foreground.
+      await execute("xcrun", ["simctl", "openurl", serial, url], {
+        log,
+        timeout: 30000,
+      });
     },
     fixture(extension, bytes) {
       assert.ok(["pdf", "png"].includes(extension));
@@ -376,14 +487,58 @@ export function createIosDevice({ runId, appId }) {
       writeFileSync(path.join(directory, name), bytes);
       return name;
     },
-    copySecret(value) {
+    copySecret(value, { restoreApp = true } = {}) {
+      let phase = "helper launch";
       try {
-        command("xcrun", ["simctl", "pbcopy", serial], {
-          input: value,
-          timeout: 15000,
-        });
-      } catch {
-        throw new Error("simctl pbcopy failed; clipboard contents omitted");
+        // The helper writes inside the simulator. Host-side simctl pbcopy can
+        // fail on Xcode 26.4. Values enter only the owned process environment,
+        // never arguments, files, Maestro flows, or published diagnostics.
+        const response = spawnSync(
+          "xcrun",
+          [
+            "simctl",
+            "launch",
+            "--console",
+            "--terminate-running-process",
+            serial,
+            helperId,
+          ],
+          {
+            encoding: "utf8",
+            maxBuffer: 1024 * 1024,
+            killSignal: "SIGKILL",
+            env: {
+              ...process.env,
+              SIMCTL_CHILD_TENDER_E2E_CLIPBOARD_MODE: value ? "write" : "clear",
+              SIMCTL_CHILD_TENDER_E2E_CLIPBOARD_VALUE: value,
+            },
+            timeout: 120000,
+          },
+        );
+        // Inspect only fixed protocol markers. Never pass native output through
+        // the general command error formatter: clipboard values are secret.
+        const output = `${response.stdout ?? ""}\n${response.stderr ?? ""}`;
+        if (response.error || response.status !== 0) {
+          const code = response.error?.code ?? response.status ?? "unavailable";
+          const readback = output.includes("TENDER_CLIPBOARD_READBACK_FAILED")
+            ? "; native readback failed"
+            : "";
+          throw new Error(`helper failed (${code})${readback}`);
+        }
+        phase = "acknowledgement";
+        assert.match(output, /\bTENDER_CLIPBOARD_OK\b/);
+        // Preserve the existing form after a password write or its final clear.
+        phase = "app restore";
+        if (restoreApp) sim("launch", serial, appId);
+      } catch (error) {
+        const code =
+          error.message.match(/failed \(([A-Z0-9-]+)\)/)?.[1] ?? "unavailable";
+        const readback = error.message.includes("native readback failed")
+          ? "; native readback failed"
+          : "";
+        throw new Error(
+          `Owned clipboard helper failed at ${phase} (code ${code}${readback}); contents omitted`,
+        );
       }
     },
     screenshot(file) {

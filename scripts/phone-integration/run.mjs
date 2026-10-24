@@ -14,8 +14,10 @@ import http from "node:http";
 import { once } from "node:events";
 import { startStack, command, workspace } from "./stack.mjs";
 import { reservePort } from "../run-native-postgres-integration.mjs";
-import { runFlows, scenarioCount } from "./scenarios.mjs";
+import { getFlowPlan, scenarioCount } from "./flow-plan.mjs";
+import { androidScenarioCount } from "./android-user-flows.mjs";
 import { createIosDevice } from "./ios-device.mjs";
+import { createIosMaestroSession } from "./ios-maestro-session.mjs";
 import { saveMaestroDiagnostics } from "./maestro-diagnostics.mjs";
 
 const appId = "com.tender.companion.e2e";
@@ -39,7 +41,8 @@ const report = {
   runId,
   status: "running",
   kind: `${platform}-native-e2e`,
-  plannedScenarios: scenarioCount,
+  plannedScenarios:
+    scenarioCount + (platform === "android" ? androidScenarioCount : 0),
   results: [],
   cleanup: false,
   startedAt: new Date().toISOString(),
@@ -61,6 +64,13 @@ let stack,
   reversePort,
   installed = false;
 let stage = "preflight";
+let flows;
+let iosSession;
+async function closeIosSession() {
+  const owned = iosSession;
+  iosSession = undefined;
+  if (owned) await owned.close();
+}
 const secrets = new Set();
 const redact = (value) => {
   let text = value;
@@ -161,7 +171,37 @@ try {
     "1",
     "Explicit native test opt-in required",
   );
+  const shardIndex = Number(process.env.TENDER_NATIVE_SHARD_INDEX ?? "0");
+  const shardCount = Number(process.env.TENDER_NATIVE_SHARD_COUNT ?? "1");
+  flows = await getFlowPlan(platform, shardIndex, shardCount);
+  report.shard = { index: shardIndex, count: shardCount };
+  report.totalScenarios = report.plannedScenarios;
+  report.plannedScenarios = flows.length;
+  report.plannedScenarioNames = flows.map(({ name }) => name);
+  report.sourceCommit = process.env.GITHUB_SHA ?? null;
+  report.ciRunId = process.env.GITHUB_RUN_ID ?? null;
+  report.ciRunAttempt = process.env.GITHUB_RUN_ATTEMPT ?? null;
+  if (shardCount > 1) report.kind = "ios-native-e2e-shard";
+  save();
   if (iosDevice) {
+    assert.ok(
+      process.env.TENDER_IOS_DRIVER_RECEIPT,
+      "Prepare the pinned iOS UI driver first",
+    );
+    report.driverBuild = JSON.parse(
+      readFileSync(process.env.TENDER_IOS_DRIVER_RECEIPT, "utf8"),
+    );
+    assert.equal(report.driverBuild.status, "passed");
+    assert.equal(report.driverBuild.cleanup, true);
+    assert.equal(
+      report.driverBuild.upstream,
+      "c8c361be1cc89b2e742f185466a302a22778be6b",
+    );
+    assert.equal(report.driverBuild.patch, "springboard-alert-hierarchy-v2");
+    assert.deepEqual(report.driverBuild.onlyTestIdentifiers, [
+      "maestro_driver_iosUITests/testHttpServer",
+    ]);
+    process.env.MAESTRO_DRIVER_STARTUP_TIMEOUT ??= "600000";
     iosDevice.prepare(report);
     serial = iosDevice.serial;
     // First boot performs OS data migration. Finish it before the local
@@ -393,6 +433,23 @@ try {
     adb("shell", "am", "force-stop", "com.google.android.apps.nexuslauncher");
   let sequence = 0;
   let focusedPasswordField;
+  const rememberLink = (link) => {
+    secrets.add(link);
+    const url = new URL(link);
+    for (const params of [
+      url.searchParams,
+      new URLSearchParams(url.hash.slice(1)),
+    ])
+      for (const key of [
+        "access_token",
+        "refresh_token",
+        "token_hash",
+        "code",
+      ]) {
+        const value = params.get(key);
+        if (value) secrets.add(value);
+      }
+  };
   async function ui(commands) {
     if (!iosDevice && commands.some((entry) => entry.launchApp)) {
       let batch = [];
@@ -446,6 +503,36 @@ try {
       if (batch.length) await ui(batch);
       return;
     }
+    if (iosDevice && commands.some((entry) => entry.openLink)) {
+      let batch = [];
+      for (const entry of commands) {
+        if (!entry.openLink) {
+          batch.push(entry);
+          continue;
+        }
+        if (batch.length) await ui(batch);
+        batch = [];
+        rememberLink(entry.openLink.link);
+        console.log(`Native ${stage} step ${++sequence}: native URL delivery`);
+        await iosDevice.openLink(entry.openLink.link, {
+          execute,
+          log: path.join(output, `${stage}-url-${sequence}.log`),
+        });
+        // iOS can require confirmation even for simctl URL delivery. Accept
+        // only the visible Open control; the following destination assertion
+        // still has to pass. Later links can arrive without another prompt.
+        batch.push({
+          runFlow: {
+            when: { visible: "^Open$" },
+            commands: [{ tapOn: "^Open$" }],
+          },
+        });
+        report.iosLinkDelivery =
+          "simctl openurl; visible Open confirmation; destination UI required";
+      }
+      if (batch.length) await ui(batch);
+      return;
+    }
     // Passwords go through Android's input service without entering a Maestro
     // file or driver log. The app still receives normal native keyboard input.
     if (commands.some((entry) => entry.inputSecret !== undefined)) {
@@ -486,25 +573,12 @@ try {
     for (const entry of commands) {
       if (entry.tapOn?.id?.includes("password"))
         focusedPasswordField = entry.tapOn.id;
-      if (entry.launchApp) entry.launchApp.permissions ??= { all: "unset" };
+      // iOS clear() already resets permissions before each fresh case. Avoid
+      // applesimutils work on every launch, and preserve grants on restarts.
+      if (entry.launchApp)
+        entry.launchApp.permissions ??= iosDevice ? {} : { all: "unset" };
       if (typeof entry.inputText === "string") secrets.add(entry.inputText);
-      if (entry.openLink?.link) {
-        secrets.add(entry.openLink.link);
-        const url = new URL(entry.openLink.link);
-        for (const params of [
-          url.searchParams,
-          new URLSearchParams(url.hash.slice(1)),
-        ])
-          for (const key of [
-            "access_token",
-            "refresh_token",
-            "token_hash",
-            "code",
-          ]) {
-            const value = params.get(key);
-            if (value) secrets.add(value);
-          }
-      }
+      if (entry.openLink?.link) rememberLink(entry.openLink.link);
     }
     const file = path.join(stack.root, `flow-${++sequence}.yaml`);
     console.log(
@@ -516,34 +590,43 @@ try {
       { mode: 0o600 },
     );
     try {
-      await execute(
-        maestro,
-        [
-          "--device",
+      if (iosDevice) {
+        iosSession ??= await createIosMaestroSession({
+          maestro,
           serial,
-          "test",
-          "--debug-output",
-          path.join(stack.root, `maestro-debug-${sequence}`),
-          "--test-output-dir",
-          path.join(stack.root, `maestro-${sequence}`),
+          root: stack.root,
+          output,
+          label: stage,
+          redact,
+        });
+        await iosSession.run(
           file,
-        ],
-        {
-          log: path.join(stack.root, `maestro-${sequence}.log`),
-          // A cold CI run needed almost five minutes before its first assertion.
-          // Keep that startup budget separate; UI assertion deadlines stay fixed.
-          timeout: iosDevice
-            ? stage === "native-startup"
-              ? 480000
-              : 300000
-            : 120000,
-        },
-      );
+          path.join(stack.root, `maestro-${sequence}.log`),
+        );
+      } else
+        await execute(
+          maestro,
+          [
+            "--device",
+            serial,
+            "test",
+            "--debug-output",
+            path.join(stack.root, `maestro-debug-${sequence}`),
+            "--test-output-dir",
+            path.join(stack.root, `maestro-${sequence}`),
+            file,
+          ],
+          {
+            log: path.join(stack.root, `maestro-${sequence}.log`),
+            timeout: 120000,
+          },
+        );
       console.log(`Native ${stage} step ${sequence}: complete`);
     } catch (error) {
-      const diagnostic = redact(
-        readFileSync(path.join(stack.root, `maestro-${sequence}.log`), "utf8"),
-      );
+      const sourceLog = path.join(stack.root, `maestro-${sequence}.log`);
+      if (!existsSync(sourceLog))
+        writeFileSync(sourceLog, redact(error.message));
+      const diagnostic = redact(readFileSync(sourceLog, "utf8"));
       writeFileSync(path.join(output, `${stage}-maestro.log`), diagnostic);
       // Driver logs distinguish a failed assertion from a stalled app launch.
       // Copy text only, redact before truncating, and keep raw debug data private.
@@ -719,6 +802,8 @@ try {
       result.status = "passed";
     } catch (error) {
       result.failure = redact(error.message);
+      if (error.driverSession) result.driverSession = error.driverSession;
+      if (error.cleanupFailed) result.driverCleanupFailed = true;
       console.error(`Native ${name}: ${result.failure}`);
       if (iosDevice) saveIosDiagnostics();
       else saveAndroidCrash();
@@ -747,7 +832,39 @@ try {
         }
       }
     } finally {
-      try {
+      const cleanupFailures = [];
+      const verifyCleanup = async (phase, action) => {
+        try {
+          await action();
+        } catch (error) {
+          cleanupFailures.push({ phase, error: redact(error.message) });
+          console.error(`Native ${name} cleanup failed: ${phase}`);
+        }
+      };
+      if (iosDevice) {
+        result.driverSession ??= iosSession?.receipt ?? null;
+        await verifyCleanup("owned XCTest session", async () => {
+          await closeIosSession();
+          assert.notEqual(
+            result.driverCleanupFailed,
+            true,
+            "Driver setup cleanup failed",
+          );
+        });
+      }
+      await verifyCleanup("device state", async () => {
+        // A failed flow can leave a SpringBoard alert over an uninstalled app.
+        // Reboot the owned simulator before reset so it cannot block the helper.
+        // The failed flow stays failed; this is only teardown recovery.
+        if (iosDevice && result.status === "failed") {
+          iosDevice.shutdown();
+          await iosDevice.boot({
+            report,
+            execute,
+            output,
+            label: `${name}-cleanup`,
+          });
+        }
         clear();
         for (const file of deviceFiles) {
           assert.match(
@@ -757,7 +874,9 @@ try {
           adb("shell", "rm", file);
           adb("shell", "test", "!", "-e", file);
         }
-        for (const user of users) {
+      });
+      for (const user of users) {
+        await verifyCleanup("owned account and data", async () => {
           for (const table of ["documents", "media_assets"]) {
             const assets = await stack.admin
               .from(table)
@@ -797,55 +916,67 @@ try {
             .eq("id", user.id);
           assert.ifError(rows.error);
           assert.equal(rows.data.length, 0);
-        }
+        });
+      }
+      await verifyCleanup("inbox", async () => {
         await stack.flushMail();
         result.mailCleanup = true;
-        result.cleanup = true;
-      } catch {
+      });
+      result.cleanup = cleanupFailures.length === 0;
+      if (!result.cleanup) {
         result.status = "failed";
-        result.failure = "Case cleanup failed";
+        result.failure ??= "Case cleanup failed";
+        result.cleanupFailures = cleanupFailures;
       }
       report.results.push(result);
       secrets.clear();
       save();
       console.log(`${name}: ${result.status}; cleanup=${result.cleanup}`);
+      if (iosDevice && process.env.GITHUB_ACTIONS === "true")
+        console.log(
+          `::notice title=iOS E2E shard ${report.shard.index}::${name}: ${result.status}; cleanup=${result.cleanup}`,
+        );
     }
     assert.ok(
       result.cleanup,
       "Stop after failed case cleanup; do not reuse uncertain state",
     );
-    assert.equal(
-      result.status,
-      "passed",
-      `Stop after failed native case: ${name}`,
-    );
+    if (!iosDevice)
+      assert.equal(
+        result.status,
+        "passed",
+        `Stop after failed native case: ${name}`,
+      );
+    // Continue iOS only after verified cleanup; failed cases remain failed.
   }
   stage = "native-startup";
   console.log(stage);
-  await ui([
-    { launchApp: { clearState: !iosDevice } },
-    {
-      extendedWaitUntil: { visible: "Welcome to Flutterings", timeout: 30000 },
-    },
-  ]);
-  const flows = [];
-  await runFlows({
-    platform,
-    scenario: async (name, fn) => flows.push({ name, fn }),
-  });
-  assert.equal(flows.length, scenarioCount);
-  assert.equal(new Set(flows.map(({ name }) => name)).size, scenarioCount);
-  // Run device-boundary cases first to expose native failures before repeating
-  // the longer account sequence. Every passing run still requires all 19 cases.
-  const deviceCases = new Set([
-    "document-picker-cancel",
-    "document-upload-native-picker",
-    "export-native-share-sheet",
-    "microphone-permission-denial",
-  ]);
-  flows.sort(
-    (a, b) => Number(deviceCases.has(b.name)) - Number(deviceCases.has(a.name)),
-  );
+  report.nativeStartupAttempts = 1;
+  try {
+    await ui([
+      { launchApp: { clearState: !iosDevice } },
+      {
+        extendedWaitUntil: {
+          visible: "Welcome to Flutterings",
+          timeout: 30000,
+        },
+      },
+    ]);
+  } catch (error) {
+    if (error.driverSession)
+      report.nativeStartupDriverSession = error.driverSession;
+    throw error;
+  } finally {
+    if (iosDevice) {
+      report.nativeStartupDriverSession ??= iosSession?.receipt ?? null;
+      try {
+        await closeIosSession();
+      } catch (error) {
+        error.cleanupFailed = true;
+        throw error;
+      }
+    }
+  }
   for (const flow of flows) await scenario(flow.name, flow.fn);
 } catch (error) {
   if (error.cleanupFailed) report.setupCleanupFailed = true;
@@ -880,8 +1011,10 @@ try {
       console.error(`Native cleanup failed: ${phase}`);
     }
   };
-  if (iosDevice) await cleanup("owned iOS simulator", () => iosDevice.close());
-  else {
+  if (iosDevice) {
+    await cleanup("owned XCTest session", closeIosSession);
+    await cleanup("owned iOS simulator", () => iosDevice.close());
+  } else {
     if (installed)
       await cleanup("isolated Android app", () => {
         adb("shell", "pm", "clear", appId);
@@ -910,7 +1043,7 @@ try {
   report.status =
     !report.error &&
     report.cleanup &&
-    report.results.length === scenarioCount &&
+    report.results.length === report.plannedScenarios &&
     report.results.every((r) => r.status === "passed" && r.cleanup)
       ? "passed"
       : "failed";
