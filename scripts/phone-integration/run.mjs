@@ -191,6 +191,9 @@ try {
       "c8c361be1cc89b2e742f185466a302a22778be6b",
     );
     assert.equal(report.driverBuild.patch, "springboard-alert-hierarchy-v1");
+    assert.deepEqual(report.driverBuild.onlyTestIdentifiers, [
+      "maestro_driver_iosUITests/testHttpServer",
+    ]);
     process.env.MAESTRO_DRIVER_STARTUP_TIMEOUT ??= "300000";
     iosDevice.prepare(report);
     serial = iosDevice.serial;

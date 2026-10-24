@@ -118,6 +118,46 @@ ${anchor}`,
     path.join(products, configs[0]),
     path.join(target, "maestro-driver-ios-config.xctestrun"),
   );
+  const testConfigPath = path.join(
+    target,
+    "maestro-driver-ios-config.xctestrun",
+  );
+  const testConfig = JSON.parse(
+    run("plutil", ["-convert", "json", "-o", "-", testConfigPath], {
+      stdio: "pipe",
+    }),
+  );
+  const onlyUiTarget = (config) => {
+    const version = config.__xctestrun_metadata__.FormatVersion;
+    assert.ok([1, 2].includes(version), "Unsupported xctestrun format");
+    let targets;
+    if (version === 2) {
+      assert.equal(config.TestConfigurations.length, 1);
+      targets = config.TestConfigurations[0].TestTargets;
+    } else {
+      targets = Object.values(config).filter((value) => value?.BlueprintName);
+    }
+    assert.equal(targets.length, 1);
+    assert.equal(targets[0].BlueprintName, "maestro-driver-iosUITests");
+    assert.equal(targets[0].IsUITestBundle, true);
+    return targets[0];
+  };
+  const uiTarget = onlyUiTarget(testConfig);
+  // The upstream bundle also contains unit methods. Start only the HTTP UI
+  // automation server; every app test is then driven through our E2E harness.
+  const serverTest = "maestro_driver_iosUITests/testHttpServer";
+  uiTarget.OnlyTestIdentifiers = [serverTest];
+  writeFileSync(testConfigPath, JSON.stringify(testConfig));
+  run("plutil", ["-convert", "xml1", testConfigPath]);
+  const verifiedConfig = JSON.parse(
+    run("plutil", ["-convert", "json", "-o", "-", testConfigPath], {
+      stdio: "pipe",
+    }),
+  );
+  assert.deepEqual(onlyUiTarget(verifiedConfig).OnlyTestIdentifiers, [
+    serverTest,
+  ]);
+  report.onlyTestIdentifiers = [serverTest];
   for (const name of [
     "maestro-driver-iosUITests-Runner",
     "maestro-driver-ios",

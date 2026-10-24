@@ -79,6 +79,9 @@ for (let index = 0; index < count; index++) {
     assert.equal(report.driverBuild?.status, "passed");
     assert.equal(report.driverBuild?.cleanup, true);
     assert.equal(report.driverBuild?.patch, "springboard-alert-hierarchy-v1");
+    assert.deepEqual(report.driverBuild?.onlyTestIdentifiers, [
+      "maestro_driver_iosUITests/testHttpServer",
+    ]);
     assert.equal(report.cleanup, true, "Harness cleanup failed");
     assert.equal(vm.cleanup, true, "VM cleanup failed");
     for (const test of report.results) {
