@@ -305,13 +305,36 @@ export function createIosDevice({ runId, appId }) {
       writeFileSync(
         source,
         `import UIKit
+import Foundation
+import Darwin
 @main class FixtureApp: UIResponder, UIApplicationDelegate {
   var window: UIWindow?
+  var handledClipboard = false
   func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
     window = UIWindow(frame: UIScreen.main.bounds)
     window?.rootViewController = UIViewController()
     window?.makeKeyAndVisible()
     return true
+  }
+  func applicationDidBecomeActive(_ application: UIApplication) {
+    guard !handledClipboard,
+      let mode = ProcessInfo.processInfo.environment["TENDER_E2E_CLIPBOARD_MODE"] else { return }
+    handledClipboard = true
+    let board = UIPasteboard.general
+    let ok: Bool
+    if mode == "clear" {
+      board.items = []
+      ok = board.items.isEmpty
+    } else if mode == "write",
+      let value = ProcessInfo.processInfo.environment["TENDER_E2E_CLIPBOARD_VALUE"], !value.isEmpty {
+      board.setItems([["public.utf8-plain-text": value]], options: [.localOnly: true, .expirationDate: Date().addingTimeInterval(600)])
+      ok = board.string == value
+    } else {
+      ok = false
+    }
+    // Only this fixed acknowledgement leaves the helper; never the value.
+    if ok { FileHandle.standardOutput.write(Data("TENDER_CLIPBOARD_OK\\n".utf8)) }
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { exit(ok ? 0 : 1) }
   }
 }
 `,
@@ -348,6 +371,14 @@ export function createIosDevice({ runId, appId }) {
         ],
         { log: path.join(output, "fixture-build.log") },
       );
+      await execute("codesign", ["--force", "--sign", "-", helperBundle], {
+        log: path.join(output, "fixture-signing.log"),
+        timeout: 30000,
+      });
+      await execute("codesign", ["--verify", "--strict", helperBundle], {
+        log: path.join(output, "fixture-signing-verification.log"),
+        timeout: 30000,
+      });
       // Resume the initialized simulator only after compilation finishes.
       await this.boot({ report, execute, output });
       this.clear();
@@ -364,11 +395,11 @@ export function createIosDevice({ runId, appId }) {
       );
       sim("keychain", serial, "reset");
       sim("keychain", serial, "add-root-cert", certificate);
-      console.log("iOS app reset: clear simulator clipboard");
-      this.copySecret("");
       console.log("iOS app reset: install isolated apps");
       for (const bundle of [appBundle, helperBundle])
         sim("install", serial, bundle);
+      console.log("iOS app reset: clear and verify simulator clipboard");
+      this.copySecret("", { restoreApp: false });
       console.log("iOS app reset: reset permissions and verify empty app data");
       sim("privacy", serial, "reset", "all", appId);
       assert.ok(installedApps()[appId]);
@@ -395,14 +426,37 @@ export function createIosDevice({ runId, appId }) {
       writeFileSync(path.join(directory, name), bytes);
       return name;
     },
-    copySecret(value) {
+    copySecret(value, { restoreApp = true } = {}) {
       try {
-        command("xcrun", ["simctl", "pbcopy", serial], {
-          input: value,
-          timeout: 15000,
-        });
+        // The helper writes inside the simulator. Host-side simctl pbcopy can
+        // fail on Xcode 26.4. Values enter only the owned process environment,
+        // never arguments, files, Maestro flows, or published diagnostics.
+        const response = command(
+          "xcrun",
+          [
+            "simctl",
+            "launch",
+            "--console",
+            "--terminate-running-process",
+            serial,
+            helperId,
+          ],
+          {
+            env: {
+              ...process.env,
+              SIMCTL_CHILD_TENDER_E2E_CLIPBOARD_MODE: value ? "write" : "clear",
+              SIMCTL_CHILD_TENDER_E2E_CLIPBOARD_VALUE: value,
+            },
+            timeout: 120000,
+          },
+        );
+        assert.ok(response.split(/\r?\n/).includes("TENDER_CLIPBOARD_OK"));
+        // Preserve the existing form after a password write or its final clear.
+        if (restoreApp) sim("launch", serial, appId);
       } catch {
-        throw new Error("simctl pbcopy failed; clipboard contents omitted");
+        throw new Error(
+          "Owned clipboard helper failed verification; contents omitted",
+        );
       }
     },
     screenshot(file) {
