@@ -30,6 +30,11 @@ assert.ok(
 );
 const iosDevice = platform === "ios" ? createIosDevice({ runId, appId }) : null;
 const maestro = process.env.MAESTRO_BIN ?? "maestro";
+const shardValue = process.env.TENDER_ANDROID_SHARD;
+assert.ok(
+  !shardValue || (platform === "android" && /^[1-3]\/3$/.test(shardValue)),
+);
+const shard = shardValue ? Number(shardValue[0]) : null;
 const output = path.join(
   workspace,
   "scripts/feature-integration/artifacts/native-phone-runs",
@@ -40,6 +45,10 @@ const report = {
   runId,
   status: "running",
   kind: `${platform}-native-e2e`,
+  sourceSha: process.env.GITHUB_SHA ?? null,
+  shard: shard ? { index: shard, count: 3 } : null,
+  catalogScenarios:
+    scenarioCount + (platform === "android" ? androidScenarioCount : 0),
   plannedScenarios:
     scenarioCount + (platform === "android" ? androidScenarioCount : 0),
   results: [],
@@ -557,6 +566,12 @@ try {
       { mode: 0o600 },
     );
     try {
+      if (!iosDevice) {
+        // A killed CLI can leave Android instrumentation registered. Stop only
+        // the two test-driver packages before creating the next UI session.
+        adb("shell", "am", "force-stop", "dev.mobile.maestro.test");
+        adb("shell", "am", "force-stop", "dev.mobile.maestro");
+      }
       await execute(
         maestro,
         [
@@ -570,6 +585,9 @@ try {
           file,
         ],
         {
+          env: iosDevice
+            ? process.env
+            : { ...process.env, MAESTRO_DRIVER_STARTUP_TIMEOUT: "60000" },
           log: path.join(stack.root, `maestro-${sequence}.log`),
           // A cold CI run needed almost five minutes before its first assertion.
           // Keep that startup budget separate; UI assertion deadlines stay fixed.
@@ -617,6 +635,8 @@ try {
           if (!stage.includes("code"))
             iosDevice.screenshot(path.join(output, `${stage}.png`));
         } else {
+          adb("shell", "am", "force-stop", "dev.mobile.maestro.test");
+          adb("shell", "am", "force-stop", "dev.mobile.maestro");
           command(
             "adb",
             [
@@ -900,7 +920,13 @@ try {
         Number(a.name.startsWith("android-")) ||
       Number(deviceCases.has(b.name)) - Number(deviceCases.has(a.name)),
   );
-  for (const flow of flows) await scenario(flow.name, flow.fn);
+  const selected = shard
+    ? flows.filter((_, index) => index % 3 === shard - 1)
+    : flows;
+  report.plannedScenarios = selected.length;
+  report.selectedScenarios = selected.map(({ name }) => name);
+  save();
+  for (const flow of selected) await scenario(flow.name, flow.fn);
 } catch (error) {
   if (error.cleanupFailed) report.setupCleanupFailed = true;
   report.error = `${stage}: ${error.message}`;

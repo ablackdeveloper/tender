@@ -186,6 +186,7 @@ export async function runAndroidFlows({ scenario, login }) {
     ]);
     assert.equal((await one(c, "journal_entries")).id, saved.id);
     await c.ui([
+      { hideKeyboard: {} },
       scroll("Permanently delete entry"),
       tap("Permanently delete entry"),
       tap("Delete permanently"),
