@@ -19,7 +19,7 @@ const id = (label) =>
 const fill = (label, value) => [
   scroll({ id: id(label) }),
   { tapOn: { id: id(label) } },
-  { eraseText: 2000 },
+  { eraseText: 50 },
   { inputText: value },
   { hideKeyboard: {} },
 ];
@@ -35,6 +35,16 @@ async function one(c, table) {
   const result = await rows(c, table);
   assert.equal(result.length, 1, `Expected one owned ${table} record`);
   return result[0];
+}
+async function waitForRow(c, table, matches) {
+  const deadline = Date.now() + 15000;
+  do {
+    const records = await rows(c, table);
+    assert.ok(records.length <= 1, `Unexpected duplicate ${table} records`);
+    if (records.length === 1 && matches(records[0])) return records[0];
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  } while (Date.now() < deadline);
+  assert.fail(`The ${table} UI write did not reach its expected saved state`);
 }
 async function waitForStatus(c, table, status) {
   const deadline = Date.now() + 15000;
@@ -106,7 +116,11 @@ export async function runAndroidFlows({ scenario, login }) {
       tap("Complete check-in"),
       visible("Today"),
     ]);
-    const saved = await one(c, "daily_checkins");
+    const saved = await waitForRow(
+      c,
+      "daily_checkins",
+      (row) => row.note === "Native checkin note" && Boolean(row.completed_at),
+    );
     assert.equal(saved.note, "Native checkin note");
     assert.ok(saved.completed_at);
     await reopen(c, "check-in", "Complete check-in");
@@ -230,7 +244,7 @@ export async function runAndroidFlows({ scenario, login }) {
       tap("Restore task"),
       visible("Mark complete"),
     ]);
-    assert.equal((await one(c, "tasks")).status, "open");
+    await waitForRow(c, "tasks", (row) => row.status === "open");
     await c.ui([
       ...fill("New support request", "Native private request"),
       tap("Add support request"),
