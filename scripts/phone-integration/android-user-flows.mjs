@@ -71,6 +71,47 @@ async function reopen(c, route, marker) {
 export async function runAndroidFlows({ scenario, login }) {
   await scenario("android-navigation-and-secondary-routes", async (c) => {
     await login(c);
+    // Tap the real tab buttons, then retain native pixels for visual review.
+    // Only fresh synthetic data is present in this case.
+    try {
+      for (const mode of ["light", "dark"]) {
+        c.adb(
+          "shell",
+          "cmd",
+          "uimode",
+          "night",
+          mode === "dark" ? "yes" : "no",
+        );
+        await c.ui([
+          { stopApp: {} },
+          { launchApp: { clearState: false } },
+          visible("Today"),
+        ]);
+        for (const [tab, marker] of [
+          ["memories", "Add a memory"],
+          ["care", "Keep care details together"],
+          ["together", "What would help right now\\?"],
+          ["today", "Today"],
+        ]) {
+          await c.ui([
+            { tapOn: { id: `tab-${tab}` } },
+            visible(marker),
+            ...["today", "memories", "care", "together", "add"].map((name) => ({
+              assertVisible: { id: `tab-${name}` },
+            })),
+          ]);
+          c.captureTabs(`tabs-${mode}-${tab}`);
+        }
+        await c.ui([
+          { tapOn: { id: "tab-add" } },
+          visible("Choose one small action. You can stop after it is saved."),
+        ]);
+        c.captureTabs(`tabs-${mode}-add`);
+        await c.ui([tap("Close"), visible("Today")]);
+      }
+    } finally {
+      c.adb("shell", "cmd", "uimode", "night", "no");
+    }
     for (const [route, marker] of [
       ["journey", "Journey"],
       ["care", "Keep care details together"],

@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { Pressable, View } from "react-native";
 
 import { AppText } from "@/components/ui";
+import { TabIcon } from "@/components/ui/tab-icon";
 import { AddActionSheet, type AddAction } from "@/features/add/add-action-sheet";
 import { useAuth } from "@/providers/auth-provider";
 import {
@@ -96,13 +97,28 @@ export default function ProductLayout() {
           },
         }}
       >
-        <Tabs.Screen name="index" options={{ title: "Today" }} />
-        <Tabs.Screen name="memories" options={{ title: "Memories" }} />
+        <Tabs.Screen
+          name="index"
+          options={{
+            title: "Today",
+            tabBarButtonTestID: "tab-today",
+            tabBarIcon: (props) => <TabIcon {...props} name="today" />,
+          }}
+        />
+        <Tabs.Screen
+          name="memories"
+          options={{
+            title: "Memories",
+            tabBarButtonTestID: "tab-memories",
+            tabBarIcon: (props) => <TabIcon {...props} name="memories" />,
+          }}
+        />
         <Tabs.Screen
           name="add"
           options={{
             tabBarButton: () => (
               <Pressable
+                testID="tab-add"
                 accessibilityLabel="Add"
                 accessibilityRole="button"
                 accessibilityHint={
@@ -157,8 +173,22 @@ export default function ProductLayout() {
             title: "Add",
           }}
         />
-        <Tabs.Screen name="care" options={{ title: "Care" }} />
-        <Tabs.Screen name="together" options={{ title: "Together" }} />
+        <Tabs.Screen
+          name="care"
+          options={{
+            title: "Care",
+            tabBarButtonTestID: "tab-care",
+            tabBarIcon: (props) => <TabIcon {...props} name="care" />,
+          }}
+        />
+        <Tabs.Screen
+          name="together"
+          options={{
+            title: "Together",
+            tabBarButtonTestID: "tab-together",
+            tabBarIcon: (props) => <TabIcon {...props} name="together" />,
+          }}
+        />
         <Tabs.Screen name="journey" options={{ href: null }} />
         <Tabs.Screen name="journal" options={{ href: null }} />
         <Tabs.Screen name="meals" options={{ href: null }} />

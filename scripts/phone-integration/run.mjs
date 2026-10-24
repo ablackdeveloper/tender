@@ -785,7 +785,30 @@ try {
           },
         },
       ]);
-      await fn({ user, fresh, ui, adb, stack, appId, fixture });
+      const captureTabs = (name) => {
+        assert.equal(platform, "android");
+        assert.equal(stage, "android-navigation-and-secondary-routes");
+        assert.match(
+          name,
+          /^tabs-(light|dark)-(today|memories|care|together|add)$/,
+        );
+        const remote = `/sdcard/${name}.png`;
+        try {
+          adb("shell", "screencap", "-p", remote);
+          adb("pull", remote, path.join(output, `${name}.png`));
+          assert.equal(
+            readFileSync(path.join(output, `${name}.png`))
+              .subarray(0, 8)
+              .toString("hex"),
+            "89504e470d0a1a0a",
+          );
+          (result.visualEvidence ??= []).push(`${name}.png`);
+        } finally {
+          adb("shell", "rm", "-f", remote);
+          adb("shell", "test", "!", "-e", remote);
+        }
+      };
+      await fn({ user, fresh, ui, adb, stack, appId, fixture, captureTabs });
       result.status = "passed";
     } catch (error) {
       result.failure = redact(error.message);

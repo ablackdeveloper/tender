@@ -60,6 +60,27 @@ try {
     assert.equal(result.cleanup, true, result.name);
     assert.equal(result.mailCleanup, true, result.name);
   }
+  const navigation = complete.results.find(
+    (result) => result.name === "android-navigation-and-secondary-routes",
+  );
+  const expectedImages = ["light", "dark"].flatMap((mode) =>
+    ["today", "memories", "care", "together", "add"].map(
+      (tab) => `tabs-${mode}-${tab}.png`,
+    ),
+  );
+  assert.deepEqual(
+    [...navigation.visualEvidence].sort(),
+    expectedImages.sort(),
+  );
+  const navigationReportIndex = reports.findIndex((report) =>
+    report.results.includes(navigation),
+  );
+  for (const name of expectedImages) {
+    const bytes = readFileSync(
+      path.join(root, path.dirname(files[navigationReportIndex]), name),
+    );
+    assert.equal(bytes.subarray(0, 8).toString("hex"), "89504e470d0a1a0a");
+  }
   complete.cleanup = true;
   complete.status = "passed";
 } catch (error) {
