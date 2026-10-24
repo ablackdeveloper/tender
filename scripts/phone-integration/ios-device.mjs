@@ -395,9 +395,21 @@ import Darwin
       );
       sim("keychain", serial, "reset");
       sim("keychain", serial, "add-root-cert", certificate);
-      console.log("iOS app reset: install isolated apps");
-      for (const bundle of [appBundle, helperBundle])
-        sim("install", serial, bundle);
+      for (const [label, bundle] of [
+        ["main app", appBundle],
+        ["fixture helper", helperBundle],
+      ]) {
+        console.log(`iOS app reset: install ${label}`);
+        try {
+          // Cold CoreSimulator installs exceeded the old two-minute command
+          // limit. This reset budget does not extend any UI assertion.
+          command("xcrun", ["simctl", "install", serial, bundle], {
+            timeout: 300000,
+          });
+        } catch (error) {
+          throw new Error(`iOS ${label} install: ${error.message}`);
+        }
+      }
       console.log("iOS app reset: clear and verify simulator clipboard");
       this.copySecret("", { restoreApp: false });
       console.log("iOS app reset: reset permissions and verify empty app data");

@@ -177,6 +177,7 @@ try {
   if (shardCount > 1) report.kind = "ios-native-e2e-shard";
   save();
   if (iosDevice) {
+    process.env.MAESTRO_DRIVER_STARTUP_TIMEOUT ??= "300000";
     iosDevice.prepare(report);
     serial = iosDevice.serial;
     // First boot performs OS data migration. Finish it before the local
@@ -570,13 +571,9 @@ try {
         ],
         {
           log: path.join(stack.root, `maestro-${sequence}.log`),
-          // A cold CI run needed almost five minutes before its first assertion.
-          // Keep that startup budget separate; UI assertion deadlines stay fixed.
-          timeout: iosDevice
-            ? stage === "native-startup"
-              ? 480000
-              : 300000
-            : 120000,
+          // XCTest has its own five-minute startup deadline. Leave time for
+          // CLI setup and this command batch; UI assertions still use 30s.
+          timeout: iosDevice ? 600000 : 120000,
         },
       );
       console.log(`Native ${stage} step ${sequence}: complete`);

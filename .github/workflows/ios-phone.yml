@@ -15,7 +15,7 @@ jobs:
       matrix:
         shard: [0, 1, 2, 3]
     runs-on: macos-26-intel
-    timeout-minutes: 120
+    timeout-minutes: 180
     env:
       DEVELOPER_DIR: /Applications/Xcode_26.4.1.app/Contents/Developer
       TENDER_IOS_VERSION: "26.4"
@@ -25,7 +25,7 @@ jobs:
       TENDER_NATIVE_SHARD_COUNT: "4"
       TENDER_TEST_PASSWORD_SOURCE: disposable-generated
       MAESTRO_CLI_NO_ANALYTICS: "1"
-      MAESTRO_DRIVER_STARTUP_TIMEOUT: "180000"
+      MAESTRO_DRIVER_STARTUP_TIMEOUT: "300000"
       HOMEBREW_NO_AUTO_UPDATE: "1"
       COLIMA_PROFILE: tender-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.shard }}
     steps:
