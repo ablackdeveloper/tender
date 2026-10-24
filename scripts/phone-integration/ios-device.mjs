@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import {
   mkdirSync,
@@ -333,7 +334,7 @@ import Darwin
       ok = false
     }
     // Only this fixed acknowledgement leaves the helper; never the value.
-    if ok { FileHandle.standardOutput.write(Data("TENDER_CLIPBOARD_OK\\n".utf8)) }
+    FileHandle.standardOutput.write(Data((ok ? "TENDER_CLIPBOARD_OK\\n" : "TENDER_CLIPBOARD_READBACK_FAILED\\n").utf8))
     DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { exit(ok ? 0 : 1) }
   }
 }
@@ -410,10 +411,13 @@ import Darwin
           throw new Error(`iOS ${label} install: ${error.message}`);
         }
       }
+      // Complete OS permission changes before the clipboard helper enters and
+      // exits the foreground; no app process needs to run for this reset.
+      console.log("iOS app reset: reset permissions");
+      sim("privacy", serial, "reset", "all", appId);
       console.log("iOS app reset: clear and verify simulator clipboard");
       this.copySecret("", { restoreApp: false });
-      console.log("iOS app reset: reset permissions and verify empty app data");
-      sim("privacy", serial, "reset", "all", appId);
+      console.log("iOS app reset: verify empty app data");
       assert.ok(installedApps()[appId]);
       const container = sim("get_app_container", serial, appId, "data").trim();
       for (const name of ["Documents", "Library/Caches"]) {
@@ -439,11 +443,12 @@ import Darwin
       return name;
     },
     copySecret(value, { restoreApp = true } = {}) {
+      let phase = "helper launch";
       try {
         // The helper writes inside the simulator. Host-side simctl pbcopy can
         // fail on Xcode 26.4. Values enter only the owned process environment,
         // never arguments, files, Maestro flows, or published diagnostics.
-        const response = command(
+        const response = spawnSync(
           "xcrun",
           [
             "simctl",
@@ -454,6 +459,9 @@ import Darwin
             helperId,
           ],
           {
+            encoding: "utf8",
+            maxBuffer: 1024 * 1024,
+            killSignal: "SIGKILL",
             env: {
               ...process.env,
               SIMCTL_CHILD_TENDER_E2E_CLIPBOARD_MODE: value ? "write" : "clear",
@@ -462,12 +470,29 @@ import Darwin
             timeout: 120000,
           },
         );
-        assert.ok(response.split(/\r?\n/).includes("TENDER_CLIPBOARD_OK"));
+        // Inspect only fixed protocol markers. Never pass native output through
+        // the general command error formatter: clipboard values are secret.
+        const output = `${response.stdout ?? ""}\n${response.stderr ?? ""}`;
+        if (response.error || response.status !== 0) {
+          const code = response.error?.code ?? response.status ?? "unavailable";
+          const readback = output.includes("TENDER_CLIPBOARD_READBACK_FAILED")
+            ? "; native readback failed"
+            : "";
+          throw new Error(`helper failed (${code})${readback}`);
+        }
+        phase = "acknowledgement";
+        assert.match(output, /\bTENDER_CLIPBOARD_OK\b/);
         // Preserve the existing form after a password write or its final clear.
+        phase = "app restore";
         if (restoreApp) sim("launch", serial, appId);
-      } catch {
+      } catch (error) {
+        const code =
+          error.message.match(/failed \(([A-Z0-9-]+)\)/)?.[1] ?? "unavailable";
+        const readback = error.message.includes("native readback failed")
+          ? "; native readback failed"
+          : "";
         throw new Error(
-          "Owned clipboard helper failed verification; contents omitted",
+          `Owned clipboard helper failed at ${phase} (code ${code}${readback}); contents omitted`,
         );
       }
     },
