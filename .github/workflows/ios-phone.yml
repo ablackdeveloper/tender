@@ -1,0 +1,83 @@
+name: iOS phone E2E
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "scripts/phone-integration/**"
+      - ".github/workflows/ios-phone.yml"
+      - "apps/mobile/**"
+permissions:
+  contents: read
+jobs:
+  ios:
+    runs-on: macos-26-intel
+    timeout-minutes: 120
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.4.1.app/Contents/Developer
+      TENDER_IOS_VERSION: "26.4"
+      TENDER_NATIVE_PLATFORM: ios
+      TENDER_NATIVE_E2E: "1"
+      TENDER_TEST_PASSWORD_SOURCE: disposable-generated
+      MAESTRO_CLI_NO_ANALYTICS: "1"
+      MAESTRO_DRIVER_STARTUP_TIMEOUT: "180000"
+      HOMEBREW_NO_AUTO_UPDATE: "1"
+      COLIMA_PROFILE: tender-${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Keep temporary backend files inside the VM mount
+        run: echo "TMPDIR=$RUNNER_TEMP" >> "$GITHUB_ENV"
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
+        with:
+          version: 11.19.0
+          run_install: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      - run: pnpm install --frozen-lockfile
+      - name: Install verified Maestro
+        run: |
+          curl --fail --location --retry 3 https://github.com/mobile-dev-inc/Maestro/releases/download/cli-2.11.0/maestro.zip --output "$RUNNER_TEMP/maestro.zip"
+          echo '5384593cb4e7a106489e75a821d157dd43f4e438df6bc308b72e82c685e1283a  '"$RUNNER_TEMP/maestro.zip" | shasum -a 256 --check
+          unzip -q "$RUNNER_TEMP/maestro.zip" -d "$RUNNER_TEMP"
+          chmod +x "$RUNNER_TEMP/maestro/bin/maestro"
+          echo "MAESTRO_BIN=$RUNNER_TEMP/maestro/bin/maestro" >> "$GITHUB_ENV"
+      - name: Initialize the Xcode simulator service
+        timeout-minutes: 5
+        run: xcrun simctl list runtimes --json > "$RUNNER_TEMP/ios-runtimes.json"
+      - name: Start owned local Docker environment
+        timeout-minutes: 20
+        run: |
+          test "$(uname -m)" = x86_64
+          test ! -e "$HOME/.colima/$COLIMA_PROFILE"
+          test ! -e "$HOME/.colima/_lima/colima-$COLIMA_PROFILE"
+          test ! -e "$HOME/.colima/_lima/_disks/colima-$COLIMA_PROFILE"
+          echo "TENDER_COLIMA_OWNED=1" >> "$GITHUB_ENV"
+          df -h "$RUNNER_TEMP"
+          brew install colima docker
+          colima start --profile "$COLIMA_PROFILE" --cpu 4 --memory 4 --disk 40 --arch x86_64 --vm-type vz --mount-type virtiofs
+          echo "DOCKER_HOST=unix://$HOME/.colima/$COLIMA_PROFILE/docker.sock" >> "$GITHUB_ENV"
+      - name: Build isolated iOS app and run native flows
+        run: |
+          docker info --format '{{.OSType}}'
+          docker info --format 'Engine {{.ServerVersion}}; driver {{.Driver}}; CPUs {{.NCPU}}; memory {{.MemTotal}}'
+          pnpm test:flows:phone
+      - name: Stop owned Docker environment
+        if: always() && env.TENDER_COLIMA_OWNED == '1'
+        run: |
+          if command -v colima >/dev/null && test -d "$HOME/.colima/$COLIMA_PROFILE"; then
+            colima delete --profile "$COLIMA_PROFILE" --data --force
+          fi
+          test ! -e "$HOME/.colima/_lima/_disks/colima-$COLIMA_PROFILE/datadisk"
+          test ! -d "$HOME/.colima/_lima/colima-$COLIMA_PROFILE"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ios-phone-evidence
+          path: scripts/feature-integration/artifacts/native-phone-runs/
+          if-no-files-found: warn
+          retention-days: 7

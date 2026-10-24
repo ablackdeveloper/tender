@@ -1,0 +1,43 @@
+# Workspace dependencies and package-manager state
+node_modules/
+**/node_modules/
+.pnpm-store/
+
+# Environment files: examples are intentionally tracked
+.env
+.env.*
+!.env.example
+!**/.env.example
+
+# Expo and native generation
+.expo/
+**/.expo/
+**/ios/
+**/android/
+*.jks
+*.p8
+*.p12
+*.key
+*.mobileprovision
+
+# Build and test output
+dist/
+**/dist/
+build/
+**/build/
+coverage/
+**/coverage/
+**/.expo-build/
+*.tsbuildinfo
+
+# Supabase local state
+supabase/.branches/
+supabase/.temp/
+
+# Logs and editor/OS files
+*.log
+.DS_Store
+Thumbs.db
+.vscode/
+!.vscode/extensions.json
+!.vscode/settings.json

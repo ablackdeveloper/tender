@@ -1,0 +1,34 @@
+begin;
+create extension if not exists pgtap with schema extensions;
+grant usage on schema extensions to authenticated;
+set local search_path = public, extensions;
+select extensions.no_plan();
+
+select extensions.ok(not has_function_privilege('anon', 'public.create_planning_list(uuid,uuid,text,text[])', 'execute'), 'anonymous callers cannot create lists');
+set local role authenticated;
+select set_config('request.jwt.claim.sub', 'b0000000-0000-4000-8000-000000000001', true);
+select extensions.is(public.create_planning_list('e1000000-0000-4000-8000-000000000001', 'b1000000-0000-4000-8000-000000000001', ' Hospital bag ', array['Charger', 'My edited item']), 'e1000000-0000-4000-8000-000000000001'::uuid, 'owner creates a template list');
+select extensions.is((select title from public.projects where id = 'e1000000-0000-4000-8000-000000000001'), 'Hospital bag', 'plan title is normalized');
+select extensions.is((select count(*) from public.tasks where project_id = 'e1000000-0000-4000-8000-000000000001'), 2::bigint, 'only selected tasks are saved');
+select extensions.is((select array_agg(title order by position) from public.tasks where project_id = 'e1000000-0000-4000-8000-000000000001'), array['Charger', 'My edited item'], 'user edits and order are preserved');
+select public.create_planning_list('e1000000-0000-4000-8000-000000000001', 'b1000000-0000-4000-8000-000000000001', 'Hospital bag', array['Charger', 'My edited item']);
+select extensions.is((select count(*) from public.tasks where project_id = 'e1000000-0000-4000-8000-000000000001'), 2::bigint, 'retry does not duplicate tasks');
+select extensions.throws_ok($$select public.create_planning_list('e1000000-0000-4000-8000-000000000002', 'b1000000-0000-4000-8000-000000000001', 'Invalid list', array['Valid', ' '])$$, '22023', 'Provide a title and 1 to 50 nonempty tasks', 'invalid task rejects the whole list');
+select extensions.is((select count(*) from public.projects where id = 'e1000000-0000-4000-8000-000000000002'), 0::bigint, 'failure leaves no empty project');
+select extensions.throws_ok($$select public.create_planning_list('e1000000-0000-4000-8000-000000000002', 'b1000000-0000-4000-8000-000000000001', 'Empty', array[]::text[])$$, '22023', 'Provide a title and 1 to 50 nonempty tasks', 'empty selection rejected');
+update public.tasks set title = 'Updated charger', status = 'completed', completed_at = now() where project_id = 'e1000000-0000-4000-8000-000000000001' and position = 0;
+select extensions.is((select title from public.tasks where project_id = 'e1000000-0000-4000-8000-000000000001' and position = 0), 'Updated charger', 'owner edits a saved task');
+update public.tasks set status = 'cancelled', completed_at = null where project_id = 'e1000000-0000-4000-8000-000000000001' and position = 0;
+select extensions.is((select status from public.tasks where project_id = 'e1000000-0000-4000-8000-000000000001' and position = 0), 'cancelled', 'removal is reversible');
+update public.tasks set status = 'open' where project_id = 'e1000000-0000-4000-8000-000000000001' and position = 0;
+select extensions.is((select status from public.tasks where project_id = 'e1000000-0000-4000-8000-000000000001' and position = 0), 'open', 'owner restores removed task');
+
+select set_config('request.jwt.claim.sub', 'b0000000-0000-4000-8000-000000000002', true);
+select extensions.throws_ok($$select public.create_planning_list('e1000000-0000-4000-8000-000000000003', 'b1000000-0000-4000-8000-000000000002', 'Partner cannot create', array['Task'])$$, '42501', 'Only the pregnancy owner can create a plan', 'partner access does not allow plan creation');
+select extensions.is((select count(*) from public.tasks where project_id = 'e1000000-0000-4000-8000-000000000001'), 0::bigint, 'unshared tasks are hidden from partner');
+select set_config('request.jwt.claim.sub', 'b0000000-0000-4000-8000-000000000003', true);
+select extensions.throws_ok($$select public.create_planning_list('e1000000-0000-4000-8000-000000000001', 'b1000000-0000-4000-8000-000000000001', 'Forged retry', array['Task'])$$, '42501', 'Only the pregnancy owner can create a plan', 'another account cannot replay the owner request');
+select extensions.is((select count(*) from public.projects where id = 'e1000000-0000-4000-8000-000000000001'), 0::bigint, 'unrelated account cannot read the plan');
+reset role;
+select * from extensions.finish();
+rollback;

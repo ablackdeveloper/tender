@@ -1,0 +1,5 @@
+-- Seed manifest guard. Data begins in the numbered files that follow so
+-- editorial fixtures remain separate from application/security scenarios.
+--
+-- All rows must stay synthetic, deterministic, local/CI-only, and free of
+-- copied production, staging, copyrighted clinical prose, or personal data.
