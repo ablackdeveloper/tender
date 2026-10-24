@@ -7,7 +7,6 @@ import {
   readFileSync,
   existsSync,
   cpSync,
-  readdirSync,
 } from "node:fs";
 import path from "node:path";
 import https from "node:https";
@@ -17,6 +16,7 @@ import { startStack, command, workspace } from "./stack.mjs";
 import { reservePort } from "../run-native-postgres-integration.mjs";
 import { runFlows, scenarioCount } from "./scenarios.mjs";
 import { createIosDevice } from "./ios-device.mjs";
+import { saveMaestroDiagnostics } from "./maestro-diagnostics.mjs";
 
 const appId = "com.tender.companion.e2e";
 const runId = randomUUID();
@@ -28,6 +28,7 @@ assert.ok(
   "Unsupported native test platform",
 );
 const iosDevice = platform === "ios" ? createIosDevice({ runId, appId }) : null;
+const maestro = process.env.MAESTRO_BIN ?? "maestro";
 const output = path.join(
   workspace,
   "scripts/feature-integration/artifacts/native-phone-runs",
@@ -172,6 +173,8 @@ try {
       output,
       label: "simulator-initialization",
     });
+    stage = "iOS driver readiness";
+    await iosDevice.checkDriver({ maestro, execute, output, report, redact });
     iosDevice.shutdown();
   } else {
     const devices = command("adb", ["devices"])
@@ -384,7 +387,6 @@ try {
     report.androidLaunchActivity = androidLaunchActivity;
   }
   // No build artifacts or raw Maestro logs with test credentials are uploaded.
-  const maestro = process.env.MAESTRO_BIN ?? "maestro";
   // The cold native build can stall the emulator's launcher. Stop that system
   // process before UI checks; never suppress an ANR from the application itself.
   if (!iosDevice)
@@ -545,22 +547,16 @@ try {
       writeFileSync(path.join(output, `${stage}-maestro.log`), diagnostic);
       // Driver logs distinguish a failed assertion from a stalled app launch.
       // Copy text only, redact before truncating, and keep raw debug data private.
-      const debug = path.join(stack.root, `maestro-debug-${sequence}`);
       try {
-        if (existsSync(debug)) {
-          const logs = readdirSync(debug, { recursive: true }).filter(
-            (name) =>
-              path.basename(name) === "maestro.log" ||
-              /^xctest_runner_[\d_-]+\.log$/.test(path.basename(name)),
-          );
-          for (const [index, name] of logs.entries())
-            writeFileSync(
-              path.join(output, `${stage}-driver-${index}.log`),
-              redact(readFileSync(path.join(debug, name), "utf8")).slice(
-                -131072,
-              ),
-            );
-        }
+        saveMaestroDiagnostics({
+          roots: [
+            path.join(stack.root, `maestro-debug-${sequence}`),
+            path.join(stack.root, `maestro-${sequence}`),
+          ],
+          output,
+          prefix: `${stage}-driver`,
+          redact,
+        });
       } catch {
         console.error(`Native ${stage}: driver diagnostics were unavailable`);
       }
@@ -903,7 +899,10 @@ try {
       await new Promise((r) => server.close(r));
     });
   if (stack) await cleanup("owned local backend", () => stack.close());
-  report.cleanup = !report.setupCleanupFailed && cleanupErrors.length === 0;
+  report.cleanup =
+    !report.setupCleanupFailed &&
+    report.driverReadiness?.cleanup !== false &&
+    cleanupErrors.length === 0;
   if (!report.cleanup) {
     report.cleanupError = "Owned test resources could not all be removed";
     report.cleanupFailures = cleanupErrors;

@@ -6,9 +6,13 @@ import {
   readdirSync,
   writeFileSync,
   existsSync,
+  mkdtempSync,
+  rmSync,
 } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { command as nativeCommand } from "./stack.mjs";
+import { saveMaestroDiagnostics } from "./maestro-diagnostics.mjs";
 
 // simctl can keep waiting after SIGTERM during a cold boot. Every synchronous
 // command here belongs to this adapter and must honor its configured deadline.
@@ -135,6 +139,59 @@ export function createIosDevice({ runId, appId }) {
     },
     shutdown() {
       sim("shutdown", serial);
+    },
+    async checkDriver({ maestro, execute, output, report, redact }) {
+      // Readiness only: a new simulator has no test accounts or app data yet.
+      // This must not count as one of the 19 production-app user flows.
+      const root = mkdtempSync(path.join(tmpdir(), "tender-ios-driver-"));
+      const debug = path.join(root, "debug");
+      const results = path.join(root, "results");
+      const flow = path.join(root, "readiness.yaml");
+      report.driverReadiness = { status: "running", cleanup: false };
+      writeFileSync(
+        flow,
+        'appId: com.apple.Preferences\n---\n- launchApp\n- extendedWaitUntil:\n    visible: "Settings"\n    timeout: 30000\n',
+      );
+      console.log("iOS driver readiness: launch Settings on owned simulator");
+      try {
+        await execute(
+          maestro,
+          [
+            "--device",
+            serial,
+            "test",
+            "--debug-output",
+            debug,
+            "--test-output-dir",
+            results,
+            flow,
+          ],
+          {
+            log: path.join(output, "driver-readiness.log"),
+            timeout: 480000,
+          },
+        );
+        report.driverReadiness.status = "passed";
+        console.log("iOS driver readiness: passed (not a user-flow case)");
+      } catch (error) {
+        report.driverReadiness.status = "failed";
+        throw error;
+      } finally {
+        try {
+          saveMaestroDiagnostics({
+            roots: [debug, results],
+            output,
+            prefix: "driver-readiness",
+            redact,
+          });
+        } finally {
+          assert.equal(path.dirname(root), path.resolve(tmpdir()));
+          assert.ok(path.basename(root).startsWith("tender-ios-driver-"));
+          rmSync(root, { recursive: true, force: true });
+          assert.ok(!existsSync(root));
+          report.driverReadiness.cleanup = true;
+        }
+      }
     },
     async build({ app, env, root, cert, output, execute, report }) {
       const ios = path.join(app, "ios");
