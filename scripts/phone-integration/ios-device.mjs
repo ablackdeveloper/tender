@@ -194,6 +194,7 @@ export function createIosDevice({ runId, appId }) {
         console.log("iOS driver readiness: passed (not a user-flow case)");
       } catch (error) {
         report.driverReadiness.status = "failed";
+        report.driverReadiness.driverSession ??= error.driverSession;
         throw error;
       } finally {
         try {
@@ -207,7 +208,8 @@ export function createIosDevice({ runId, appId }) {
           assert.ok(path.basename(root).startsWith("tender-ios-driver-"));
           rmSync(root, { recursive: true, force: true });
           assert.ok(!existsSync(root));
-          report.driverReadiness.cleanup = session?.receipt.cleanup === true;
+          report.driverReadiness.cleanup =
+            report.driverReadiness.driverSession?.cleanup === true;
           report.driverReadiness.elapsedMs = Date.now() - started;
           if (
             report.driverReadiness.status === "passed" &&

@@ -792,6 +792,7 @@ try {
       result.status = "passed";
     } catch (error) {
       result.failure = redact(error.message);
+      if (error.driverSession) result.driverSession = error.driverSession;
       if (error.cleanupFailed) result.driverCleanupFailed = true;
       console.error(`Native ${name}: ${result.failure}`);
       if (iosDevice) saveIosDiagnostics();
@@ -831,7 +832,7 @@ try {
         }
       };
       if (iosDevice) {
-        result.driverSession = iosSession?.receipt ?? null;
+        result.driverSession ??= iosSession?.receipt ?? null;
         await verifyCleanup("owned XCTest session", async () => {
           await closeIosSession();
           assert.notEqual(
@@ -951,9 +952,13 @@ try {
         },
       },
     ]);
+  } catch (error) {
+    if (error.driverSession)
+      report.nativeStartupDriverSession = error.driverSession;
+    throw error;
   } finally {
     if (iosDevice) {
-      report.nativeStartupDriverSession = iosSession?.receipt ?? null;
+      report.nativeStartupDriverSession ??= iosSession?.receipt ?? null;
       try {
         await closeIosSession();
       } catch (error) {

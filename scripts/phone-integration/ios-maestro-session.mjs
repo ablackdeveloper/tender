@@ -55,6 +55,9 @@ export async function createIosMaestroSession({
     batches: 0,
     cleanup: false,
     startedAt: new Date().toISOString(),
+    protocolBytes: 0,
+    diagnosticBytes: 0,
+    handshakeTimeoutMs: 300000,
   };
   const child = spawn(
     maestro,
@@ -96,11 +99,15 @@ export async function createIosMaestroSession({
   child.on("error", () =>
     fail(new Error("Owned Maestro process failed to start")),
   );
+  child.on("spawn", () => {
+    receipt.spawnedAt = new Date().toISOString();
+  });
   child.on("exit", () =>
     fail(new Error("Owned Maestro process exited before its response")),
   );
   child.stdin.on("error", () => fail(new Error("Owned Maestro input closed")));
   child.stderr.on("data", (data) => {
+    receipt.diagnosticBytes += data.length;
     stderr += data.toString();
     if (stderr.length > 1048576) {
       stderrTruncated = true;
@@ -109,6 +116,7 @@ export async function createIosMaestroSession({
   });
   child.stdout.setEncoding("utf8");
   child.stdout.on("data", (data) => {
+    receipt.protocolBytes += Buffer.byteLength(data);
     buffer += data;
     if (buffer.length > 4194304) {
       buffer = "";
@@ -152,7 +160,7 @@ export async function createIosMaestroSession({
         resolve,
         reject,
         timer: setTimeout(
-          () => fail(new Error("Maestro session request timed out")),
+          () => fail(new Error(`Maestro ${method} request timed out`)),
           timeout,
         ),
       };
@@ -254,13 +262,14 @@ export async function createIosMaestroSession({
         capabilities: {},
         clientInfo: { name: "tender-isolated-e2e", version: "1.0.0" },
       },
-      60000,
+      receipt.handshakeTimeoutMs,
     );
     assert.equal(initialized.serverInfo?.name, "maestro");
+    receipt.initializedAt = new Date().toISOString();
     child.stdin.write(
       `${JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" })}\n`,
     );
-    const tools = await request("tools/list", {}, 30000);
+    const tools = await request("tools/list", {}, receipt.handshakeTimeoutMs);
     assert.ok(tools.tools?.some((tool) => tool.name === "run"));
   } catch (error) {
     try {
@@ -268,6 +277,7 @@ export async function createIosMaestroSession({
     } catch {
       error.cleanupFailed = true;
     }
+    error.driverSession = receipt;
     throw error;
   }
   return {
