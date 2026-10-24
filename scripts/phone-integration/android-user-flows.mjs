@@ -38,6 +38,15 @@ async function one(c, table) {
   assert.equal(result.length, 1, `Expected one owned ${table} record`);
   return result[0];
 }
+async function waitForStatus(c, table, status) {
+  const deadline = Date.now() + 15000;
+  do {
+    const row = await one(c, table);
+    if (row.lifecycle_status === status) return;
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  } while (Date.now() < deadline);
+  assert.fail(`The saved ${table} status did not become ${status}`);
+}
 async function reopen(c, route, marker) {
   await c.ui([
     { stopApp: {} },
@@ -62,7 +71,7 @@ export async function runAndroidFlows({ scenario, login }) {
       ["add", "Today"],
       ["planning", "Projects and tasks"],
       ["care/summary", "Generate selected summary"],
-      ["recovery", "Build my support plan"],
+      ["recovery", "Recovery space is optional"],
       ["memory-capsule", "This week's moments"],
       ["meals", "Log a meal"],
       ["journal", "Add a memory"],
@@ -115,7 +124,7 @@ export async function runAndroidFlows({ scenario, login }) {
       tap("Meal"),
       ...fill("Ingredients", "Rice, beans"),
       ...fill("Notes", "Native meal note"),
-      scroll("Saved", "UP"),
+      scroll("Saved"),
       visible("Saved"),
     ]);
     const saved = await one(c, "meals");
@@ -123,7 +132,7 @@ export async function runAndroidFlows({ scenario, login }) {
     await reopen(c, `meals/${saved.id}`, "Ingredients");
     await c.ui([
       ...fill("Notes", "Native meal edited"),
-      scroll("Saved", "UP"),
+      scroll("Saved"),
       visible("Saved"),
     ]);
     assert.equal((await one(c, "meals")).notes, "Native meal edited");
@@ -175,6 +184,7 @@ export async function runAndroidFlows({ scenario, login }) {
       link("care"),
       tap("Care team"),
       ...fill("Provider name", "Native provider"),
+      ...fill("Phone", "+12025550123"),
       scroll("Add provider record"),
       tap("Add provider record"),
       scroll("Native provider", "UP"),
@@ -294,6 +304,7 @@ export async function runAndroidFlows({ scenario, login }) {
       scroll("Save pregnancy settings"),
       tap("Save pregnancy settings"),
     ]);
+    await waitForStatus(c, "pregnancy_experience_settings", "paused");
     await reopen(c, "pregnancy-settings", "Pregnancy settings");
     assert.equal(
       (await one(c, "pregnancy_experience_settings")).lifecycle_status,
@@ -305,6 +316,7 @@ export async function runAndroidFlows({ scenario, login }) {
       scroll("Save pregnancy settings"),
       tap("Save pregnancy settings"),
     ]);
+    await waitForStatus(c, "pregnancy_experience_settings", "active");
     await reopen(c, "pregnancy-settings", "Pregnancy settings");
     assert.equal(
       (await one(c, "pregnancy_experience_settings")).lifecycle_status,
