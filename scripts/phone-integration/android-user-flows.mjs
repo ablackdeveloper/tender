@@ -5,9 +5,7 @@ const visible = (text) => ({
   extendedWaitUntil: { visible: text, timeout: 30000 },
 });
 const tap = (text) => ({ tapOn: text });
-const link = (route) => ({
-  openLink: { link: `tender://${route}`, autoVerify: true },
-});
+const link = (route) => ({ androidOpenLink: `tender://${route}` });
 const scroll = (element, direction = "DOWN") => ({
   scrollUntilVisible: {
     element,
@@ -67,8 +65,8 @@ export async function runAndroidFlows({ scenario, login }) {
       ["journey", "Journey"],
       ["care", "Keep care details together"],
       ["memories", "Add a memory"],
-      ["together", "Together"],
-      ["add", "Today"],
+      ["together", "What would help right now\\?"],
+      ["add", "Today preferences"],
       ["planning", "Projects and tasks"],
       ["care/summary", "Generate selected summary"],
       ["recovery", "Recovery space is optional"],

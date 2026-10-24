@@ -396,6 +396,45 @@ try {
   let sequence = 0;
   let focusedPasswordField;
   async function ui(commands) {
+    if (!iosDevice && commands.some((entry) => entry.androidOpenLink)) {
+      let batch = [];
+      for (const entry of commands) {
+        if (!entry.androidOpenLink) {
+          batch.push(entry);
+          continue;
+        }
+        if (batch.length) await ui(batch);
+        batch = [];
+        const url = entry.androidOpenLink;
+        assert.match(url, /^tender:\/\/[a-z0-9/-]*$/);
+        secrets.add(url);
+        const log = path.join(
+          output,
+          `${stage}-android-link-${++sequence}.log`,
+        );
+        await execute(
+          "adb",
+          [
+            "-s",
+            serial,
+            "shell",
+            "am",
+            "start",
+            "-W",
+            "-a",
+            "android.intent.action.VIEW",
+            "-d",
+            url,
+            "-p",
+            appId,
+          ],
+          { log, timeout: 30000 },
+        );
+        assert.match(readFileSync(log, "utf8"), /^Status: ok\r?$/m);
+      }
+      if (batch.length) await ui(batch);
+      return;
+    }
     if (!iosDevice && commands.some((entry) => entry.launchApp)) {
       let batch = [];
       for (const entry of commands) {
@@ -811,13 +850,21 @@ try {
       secrets.clear();
       save();
       console.log(`${name}: ${result.status}; cleanup=${result.cleanup}`);
+      if (platform === "android" && process.env.GITHUB_ACTIONS === "true")
+        console.log(
+          `::notice title=Android E2E::${name}: ${result.status}; cleanup=${result.cleanup}`,
+        );
     }
     assert.ok(
       result.cleanup,
       "Stop after failed case cleanup; do not reuse uncertain state",
     );
     if (platform === "ios")
-      assert.equal(result.status, "passed", `Stop after failed native case: ${name}`);
+      assert.equal(
+        result.status,
+        "passed",
+        `Stop after failed native case: ${name}`,
+      );
     // Android failures remain failed in the final report. Continue only after
     // verified cleanup so one selector failure does not hide later flow defects.
   }
