@@ -84,7 +84,10 @@ export async function runAndroidFlows({ scenario, login }) {
       ["meals", "Log a meal"],
       ["journal", "Add a memory"],
       ["get-help", "Get help"],
-      ["health-data", "Not active yet"],
+      [
+        "health-data",
+        "Phone health connections are not enabled in this build.*",
+      ],
     ]) {
       await c.ui([link(route), scroll(marker), visible(marker)]);
     }
@@ -183,6 +186,7 @@ export async function runAndroidFlows({ scenario, login }) {
     ]);
     assert.equal((await one(c, "journal_entries")).id, saved.id);
     await c.ui([
+      scroll("Permanently delete entry"),
       tap("Permanently delete entry"),
       tap("Delete permanently"),
       visible("Add a memory"),
@@ -199,8 +203,8 @@ export async function runAndroidFlows({ scenario, login }) {
       ...fill("Phone", "+12025550123"),
       scroll("Add provider record"),
       tap("Add provider record"),
-      scroll("Native provider", "UP"),
-      visible("Native provider"),
+      scroll("Native provider.*Primary", "UP"),
+      visible("Native provider.*Primary"),
     ]);
     assert.equal((await one(c, "providers")).name, "Native provider");
     await reopen(c, "care", "Keep care details together");
@@ -212,6 +216,7 @@ export async function runAndroidFlows({ scenario, login }) {
     ]);
     assert.equal((await rows(c, "providers")).length, 1);
     await c.ui([
+      scroll("Delete provider record"),
       tap("Delete provider record"),
       tap("Permanently delete record"),
       visible("No providers recorded."),
@@ -305,7 +310,19 @@ export async function runAndroidFlows({ scenario, login }) {
     assert.match(saved.quiet_hours_start, /^21:30/);
     assert.equal(saved.revealing_content_enabled, false);
     await reopen(c, "notification-settings", "Notifications");
-    await c.ui([scroll("21:30"), visible("21:30")]);
+    await c.ui([
+      scroll("21:30"),
+      visible("21:30"),
+      visible("08:00"),
+      scroll("Save choices"),
+      tap("Save choices"),
+      scroll("Notification choices saved.", "UP"),
+      visible("Notification choices saved."),
+      { assertNotVisible: "Settings not saved" },
+    ]);
+    const reopened = await one(c, "notification_preferences");
+    assert.match(reopened.quiet_hours_start, /^21:30/);
+    assert.match(reopened.quiet_hours_end, /^08:00/);
   });
 
   await scenario("android-pregnancy-pause-and-restore", async (c) => {
